@@ -3,15 +3,14 @@
  * This file does not link against PHP
  *
  * Build and run on POSIX:
- *   cc -std=gnu23 -Wall -Wextra -Werror -O2 -pthread -Iext/tensor \
- *      ext/tensor/tests/c/toy_arena_test.c ext/tensor/toy_arena.c \
- *      ext/tensor/toy_spec_cache.c -o /tmp/toy_arena_test
- *   /tmp/toy_arena_test
+ *   cc -std=gnu23 -Wall -Wextra -Werror -O2 -pthread -I. \
+ *      tests/c/arena_test.c toy_arena.c toy_spec_cache.c -o arena_test
+ *   ./arena_test
  *
  * Build and run on Windows from a vcvars64 shell:
  *   cl /nologo /std:clatest /W4 /WX /O2 toy_arena.c toy_spec_cache.c \
- *      toy_arena_test.c /Fe:toy_arena_test.exe
- *   toy_arena_test.exe
+ *      tests\c\arena_test.c /Fe:arena_test.exe
+ *   arena_test.exe
  */
 
 #include <stdalign.h>

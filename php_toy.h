@@ -3,6 +3,18 @@
 
 #include "php.h"
 
+/*
+ * Marks the C symbols that the extension exports
+ * The build hides every other symbol
+ */
+#ifdef _WIN32
+# define TOY_API __declspec(dllexport)
+#elif defined(__GNUC__) || defined(__clang__)
+# define TOY_API __attribute__((visibility("default")))
+#else
+# define TOY_API
+#endif
+
 #include "toy_tensor.h"
 
 extern zend_module_entry toy_module_entry;

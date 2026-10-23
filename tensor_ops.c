@@ -6,7 +6,6 @@
 
 #include "php_toy.h"
 #include "toy_kernel.h"
-#include "toy_tensor_ops.h"
 
 #include <math.h>
 #include <string.h>
@@ -422,7 +421,7 @@ static bool php_toy_tensor_add_impl(toy_tensor *a, toy_tensor *b, zval *out_valu
         kernel(toy_tensor_data(a), toy_tensor_data(b), toy_tensor_data(result));
         toy_kernel_count_kernel_call();
     } else {
-        toy_add_f32(toy_tensor_data(a), toy_tensor_data(b), toy_tensor_data(result), numel);
+        ref_add_f32(toy_tensor_data(a), toy_tensor_data(b), toy_tensor_data(result), numel);
         toy_kernel_count_scalar_call();
     }
 
@@ -468,7 +467,7 @@ static bool php_toy_tensor_scale_impl(toy_tensor *a, double factor, zval *out_va
         kernel(toy_tensor_data(a), NULL, toy_tensor_data(result));
         toy_kernel_count_kernel_call();
     } else {
-        toy_scale_f32(toy_tensor_data(a), value, toy_tensor_data(result), numel);
+        ref_scale_f32(toy_tensor_data(a), value, toy_tensor_data(result), numel);
         toy_kernel_count_scalar_call();
     }
 
@@ -507,7 +506,7 @@ static void php_toy_tensor_rmsnorm_impl(toy_tensor *x, toy_tensor *w, double eps
         kernel(toy_tensor_data(x), toy_tensor_data(w), toy_tensor_data(result));
         toy_kernel_count_kernel_call();
     } else {
-        toy_rmsnorm_f32(toy_tensor_data(x), toy_tensor_data(w), toy_tensor_data(result),
+        ref_rmsnorm_f32(toy_tensor_data(x), toy_tensor_data(w), toy_tensor_data(result),
                         n, eps32);
         toy_kernel_count_scalar_call();
     }
@@ -550,8 +549,8 @@ static bool php_toy_tensor_matmul_impl(toy_tensor *a, toy_tensor *b, uint32_t m,
         kernel(toy_tensor_data(a), toy_tensor_data(b), toy_tensor_data(result));
         toy_kernel_count_kernel_call();
     } else {
-        toy_matmul_f32(toy_tensor_data(a), toy_tensor_data(b), toy_tensor_data(result),
-                       m, n, k);
+        toy_ref_gemm(m, n, k, toy_tensor_data(a), toy_tensor_data(b),
+                     toy_tensor_data(result));
         toy_kernel_count_scalar_call();
     }
 
@@ -595,7 +594,8 @@ static bool php_toy_tensor_matvec_impl(toy_tensor *w, toy_tensor *x, uint32_t m,
         kernel(toy_tensor_data(w), toy_tensor_data(x), toy_tensor_data(result));
         toy_kernel_count_kernel_call();
     } else {
-        toy_matvec_f32(toy_tensor_data(w), toy_tensor_data(x), toy_tensor_data(result), m, k);
+        toy_ref_matvec(m, k, toy_tensor_data(w), toy_tensor_data(x),
+                       toy_tensor_data(result));
         toy_kernel_count_scalar_call();
     }
 
@@ -946,7 +946,7 @@ PHP_FUNCTION(toy_tensor_rmsnorm_into)
         kernel(toy_tensor_data(x), toy_tensor_data(w), toy_tensor_data(out));
         toy_kernel_count_kernel_call();
     } else {
-        toy_rmsnorm_f32(toy_tensor_data(x), toy_tensor_data(w), toy_tensor_data(out),
+        ref_rmsnorm_f32(toy_tensor_data(x), toy_tensor_data(w), toy_tensor_data(out),
                         n, eps32);
         toy_kernel_count_scalar_call();
     }

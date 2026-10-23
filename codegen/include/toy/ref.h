@@ -11,15 +11,18 @@ extern "C" {
 /*
  * Scalar f32 reference, separate from the generator
  *
- * The build must disable contraction and auto-vectorization:
- *   -ffp-contract=off -fno-tree-vectorize -fno-tree-slp-vectorize
- * and enable hardware FMA (-mfma), so fmaf maps to one instruction
+ * Each accumulation uses fmaf to match the single-rounded FMA of the
+ * generated kernels
  */
 
 void toy_ref_gemm(uint32_t m, uint32_t n, uint32_t k,
                   const float *a, const float *b, float *c);
 void toy_ref_matvec(uint32_t m, uint32_t k, const float *w, const float *x, float *y);
 void toy_ref_dot(uint32_t k, const float *x, const float *y, float *out);
+
+void ref_add_f32(const float *a, const float *b, float *c, size_t count);
+void ref_scale_f32(const float *a, float factor, float *c, size_t count);
+void ref_rmsnorm_f32(const float *x, const float *w, float *out, uint32_t n, float eps);
 
 /*
  * q8_0 reference: each block first sums q_i * x_i in f32, then the f16 scale

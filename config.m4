@@ -51,9 +51,9 @@ if test "$PHP_TOY" != "no"; then
     toy_kernel_arena.c
     toy_spec_cache.c
     toy_tensor.c
-    toy_tensor_ops.c
   ]), [$ext_shared],, [
     -std=gnu23
+    -fvisibility=hidden
     -I$abs_srcdir/codegen/include
     -DZEND_ENABLE_STATIC_TSRMLS_CACHE=1
   ])

@@ -6,7 +6,7 @@ declare(strict_types=1);
  * PHP-level tests for the tensor core and the five functions; run with the
  * built extension:
  *   php -n -d extension=$PWD/modules/toy.so tests/manual/tensor_test.php
- * The C-only alias API is covered by tests/c/toy_tensor_test.c
+ * The C-only alias API is covered by tests/c/tensor_test.c
  * phpize --clean deletes tests/*.php, so this script lives in a subdirectory
  */
 

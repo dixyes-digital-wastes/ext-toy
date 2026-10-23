@@ -5,6 +5,20 @@
 #include <stddef.h>
 #include <stdint.h>
 
+/*
+ * Marks the exported C function. The extension build also defines this macro
+ * in php_toy.h. This copy keeps a standalone build of the tensor core complete
+ */
+#ifndef TOY_API
+# ifdef _WIN32
+#  define TOY_API __declspec(dllexport)
+# elif defined(__GNUC__) || defined(__clang__)
+#  define TOY_API __attribute__((visibility("default")))
+# else
+#  define TOY_API
+# endif
+#endif
+
 enum {
     TOY_TENSOR_MAX_DIMS = 4,
     TOY_TENSOR_ALIGNMENT = 64,
@@ -97,10 +111,11 @@ const char *toy_dtype_name(toy_dtype dtype);
 [[nodiscard]] toy_tensor *toy_tensor_alloc(toy_dtype dtype, uint8_t rank,
                                            const uint32_t *dims, toy_status *status);
 
-/* Wraps external memory; the tensor does not own the memory */
-[[nodiscard]] toy_tensor *toy_tensor_alias(void *data, size_t bytes, toy_dtype dtype,
-                                           uint8_t rank,
-                                           const uint32_t dims[TOY_TENSOR_MAX_DIMS]);
+/* Wraps external memory; the tensor does not own the memory. This is the only
+ * exported C function */
+[[nodiscard]] TOY_API toy_tensor *toy_tensor_alias(void *data, size_t bytes, toy_dtype dtype,
+                                                   uint8_t rank,
+                                                   const uint32_t dims[TOY_TENSOR_MAX_DIMS]);
 
 toy_tensor *toy_tensor_retain(toy_tensor *tensor);
 void toy_tensor_release(toy_tensor *tensor);

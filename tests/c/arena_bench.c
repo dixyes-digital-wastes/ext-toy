@@ -7,9 +7,8 @@
  *
  * Build and run:
  *   cc -std=gnu23 -Wall -Wextra -Werror -O2 -pthread -I. \
- *      tests/c/toy_arena_bench.c toy_arena.c \
- *      -o /tmp/toy_arena_bench
- *   /tmp/toy_arena_bench [repeats]
+ *      tests/c/arena_bench.c toy_arena.c -o arena_bench
+ *   ./arena_bench [repeats]
  */
 
 #include <pthread.h>

@@ -3,10 +3,10 @@
  * This file does not link against PHP; the alias tests cover the C-only API
  *
  * Build and run:
- *   cc -std=gnu23 -Wall -Wextra -Iext/tensor \
- *      ext/tensor/tests/c/toy_tensor_test.c ext/tensor/toy_tensor.c \
- *      ext/tensor/toy_tensor_ops.c -lm -o /tmp/toy_tensor_test
- *   /tmp/toy_tensor_test
+ *   cc -std=gnu23 -Wall -Wextra -I. -Icodegen/include \
+ *      tests/c/tensor_test.c toy_tensor.c codegen/src/ref.c \
+ *      codegen/src/q8_0.c -lm -o tensor_test
+ *   ./tensor_test
  */
 
 #include <math.h>
@@ -15,8 +15,8 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "toy/ref.h"
 #include "toy_tensor.h"
-#include "toy_tensor_ops.h"
 
 static_assert(TOY_TENSOR_ALIGNMENT == 64, "test buffer alignment");
 
@@ -215,7 +215,7 @@ static void test_kernels(void)
     float b[4] = { 5.0f, 6.0f, 7.0f, 8.0f };
     float c[4] = { 0 };
 
-    toy_matmul_f32(a, b, c, 2, 2, 2);
+    toy_ref_gemm(2, 2, 2, a, b, c);
     check_near(c[0], 19.0f, test_tolerance, "matmul[0]");
     check_near(c[1], 22.0f, test_tolerance, "matmul[1]");
     check_near(c[2], 43.0f, test_tolerance, "matmul[2]");
@@ -223,23 +223,23 @@ static void test_kernels(void)
 
     float x[2] = { 5.0f, 6.0f };
     float y[2] = { 0 };
-    toy_matvec_f32(a, x, y, 2, 2);
+    toy_ref_matvec(2, 2, a, x, y);
     check_near(y[0], 17.0f, test_tolerance, "matvec[0]");
     check_near(y[1], 39.0f, test_tolerance, "matvec[1]");
 
     float sum[4] = { 0 };
-    toy_add_f32(a, b, sum, 4);
+    ref_add_f32(a, b, sum, 4);
     check_near(sum[0], 6.0f, test_tolerance, "add[0]");
     check_near(sum[3], 12.0f, test_tolerance, "add[3]");
 
-    toy_scale_f32(a, 2.5f, sum, 4);
+    ref_scale_f32(a, 2.5f, sum, 4);
     check_near(sum[0], 2.5f, test_tolerance, "scale[0]");
     check_near(sum[3], 10.0f, test_tolerance, "scale[3]");
 
     float norm_x[2] = { 3.0f, 4.0f };
     float norm_w[2] = { 1.0f, 2.0f };
     float norm_out[2] = { 0 };
-    toy_rmsnorm_f32(norm_x, norm_w, norm_out, 2, 0.0f);
+    ref_rmsnorm_f32(norm_x, norm_w, norm_out, 2, 0.0f);
     float scale = 1.0f / sqrtf(12.5f);
     check_near(norm_out[0], 3.0f * scale, test_tolerance, "rmsnorm[0]");
     check_near(norm_out[1], 8.0f * scale, test_tolerance, "rmsnorm[1]");
