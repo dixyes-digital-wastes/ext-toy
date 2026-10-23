@@ -112,6 +112,16 @@ void toy_tensor_release(toy_tensor *tensor);
 /* Copies into a newly allocated tensor */
 [[nodiscard]] toy_tensor *toy_tensor_clone(const toy_tensor *tensor, toy_status *status);
 
+/* Fills every element with one scalar; f32 and q8_0 only */
+[[nodiscard]] toy_status toy_tensor_fill(toy_tensor *tensor, float value);
+
+/*
+ * Converts into a newly allocated tensor of another dtype; f32 and q8_0 only
+ * Same-dtype conversion copies the bytes
+ */
+[[nodiscard]] toy_tensor *toy_tensor_cast(const toy_tensor *tensor, toy_dtype dtype,
+                                          toy_status *status);
+
 size_t toy_tensor_numel(const toy_tensor *tensor);
 
 static inline void *toy_tensor_data(const toy_tensor *tensor)

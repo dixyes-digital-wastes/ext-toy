@@ -27,7 +27,7 @@ show(fn() => Toy\Tensor\scale($a, []));
 show(fn() => Toy\Tensor\rmsnorm($x, tensor([2], [1.0, 2.0]), []));
 show(fn() => Toy\Tensor\add($a, $flat));
 show(fn() => Toy\Tensor\rmsnorm($x, tensor([1], [1.0])));
-show(fn() => Toy\Tensor::zeros('q8_0', [32]));
+show(fn() => Toy\Tensor::zeros('f16', [32]));
 show(fn() => Toy\Tensor\matmul_f32($a, $b, 3, 2, 2));
 show(fn() => Toy\Tensor\kernel_isa('sse'));
 

@@ -132,6 +132,8 @@ void toy_asm_mov_imm64(struct toy_asm *as, uint8_t dst, uint64_t imm);
 void toy_asm_mov_rr(struct toy_asm *as, uint8_t dst, uint8_t src);
 void toy_asm_mov_load(struct toy_asm *as, uint8_t dst, struct toy_mem mem);
 void toy_asm_mov_store(struct toy_asm *as, struct toy_mem mem, uint8_t src);
+void toy_asm_push_r64(struct toy_asm *as, uint8_t reg);
+void toy_asm_pop_r64(struct toy_asm *as, uint8_t reg);
 
 void toy_asm_lea(struct toy_asm *as, uint8_t dst, struct toy_mem mem);
 
@@ -164,6 +166,13 @@ void toy_asm_vfmadd231ss_mem(struct toy_asm *as, uint8_t dst, uint8_t src2, stru
 void toy_asm_vaddps(struct toy_asm *as, bool wide, uint8_t dst, uint8_t src2, uint8_t src3);
 void toy_asm_vmulps(struct toy_asm *as, bool wide, uint8_t dst, uint8_t src2, uint8_t src3);
 void toy_asm_vxorps(struct toy_asm *as, bool wide, uint8_t dst, uint8_t src2, uint8_t src3);
+
+void toy_asm_vpmovsxbd(struct toy_asm *as, bool wide, uint8_t dst, struct toy_mem mem);
+void toy_asm_vcvtdq2ps(struct toy_asm *as, bool wide, uint8_t dst, uint8_t src);
+void toy_asm_vcvtph2ps(struct toy_asm *as, uint8_t dst, struct toy_mem mem);
+void toy_asm_vhaddps(struct toy_asm *as, uint8_t dst, uint8_t src2, uint8_t src3);
+void toy_asm_vpermilps(struct toy_asm *as, uint8_t dst, uint8_t src, uint8_t imm);
+void toy_asm_vbroadcastss_reg(struct toy_asm *as, uint8_t dst, uint8_t src);
 
 void toy_asm_vextractf128(struct toy_asm *as, uint8_t dst, uint8_t src, uint8_t imm);
 void toy_asm_vshufps(struct toy_asm *as, uint8_t dst, uint8_t src2, uint8_t src3, uint8_t imm);

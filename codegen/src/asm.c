@@ -197,6 +197,20 @@ void toy_asm_mov_rr(struct toy_asm *as, uint8_t dst, uint8_t src) {
     emit_modrm_reg(as, src, dst);
 }
 
+void toy_asm_push_r64(struct toy_asm *as, uint8_t reg) {
+    if (reg >= 8) {
+        emit_u8(as, 0x41);
+    }
+    emit_u8(as, (uint8_t)(0x50 + (reg & 7)));
+}
+
+void toy_asm_pop_r64(struct toy_asm *as, uint8_t reg) {
+    if (reg >= 8) {
+        emit_u8(as, 0x41);
+    }
+    emit_u8(as, (uint8_t)(0x58 + (reg & 7)));
+}
+
 void toy_asm_mov_load(struct toy_asm *as, uint8_t dst, struct toy_mem mem) {
     emit_gpr_mem(as, true, dst, mem, 0x8B);
 }
@@ -317,6 +331,31 @@ void toy_asm_vmulps(struct toy_asm *as, bool wide, uint8_t dst, uint8_t src2, ui
 
 void toy_asm_vxorps(struct toy_asm *as, bool wide, uint8_t dst, uint8_t src2, uint8_t src3) {
     emit_vex(as, 1, 0, wide, false, src2, dst, false, NULL, src3, 0x57);
+}
+
+void toy_asm_vpmovsxbd(struct toy_asm *as, bool wide, uint8_t dst, struct toy_mem mem) {
+    emit_vex(as, 2, 1, wide, false, 0, dst, true, &mem, 0, 0x21);
+}
+
+void toy_asm_vcvtdq2ps(struct toy_asm *as, bool wide, uint8_t dst, uint8_t src) {
+    emit_vex(as, 1, 0, wide, false, 0, dst, false, NULL, src, 0x5B);
+}
+
+void toy_asm_vcvtph2ps(struct toy_asm *as, uint8_t dst, struct toy_mem mem) {
+    emit_vex(as, 2, 1, false, false, 0, dst, true, &mem, 0, 0x13);
+}
+
+void toy_asm_vhaddps(struct toy_asm *as, uint8_t dst, uint8_t src2, uint8_t src3) {
+    emit_vex(as, 1, 3, false, false, src2, dst, false, NULL, src3, 0x7C);
+}
+
+void toy_asm_vpermilps(struct toy_asm *as, uint8_t dst, uint8_t src, uint8_t imm) {
+    emit_vex(as, 3, 1, false, false, 0, dst, false, NULL, src, 0x04);
+    emit_u8(as, imm);
+}
+
+void toy_asm_vbroadcastss_reg(struct toy_asm *as, uint8_t dst, uint8_t src) {
+    emit_vex(as, 2, 1, true, false, 0, dst, false, NULL, src, 0x18);
 }
 
 void toy_asm_vextractf128(struct toy_asm *as, uint8_t dst, uint8_t src, uint8_t imm) {

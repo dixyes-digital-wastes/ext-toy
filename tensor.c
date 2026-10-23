@@ -107,8 +107,9 @@ toy_tensor *php_toy_tensor_alloc_object(zval *return_value, toy_dtype dtype, uin
                                   ZSTR_VAL(name));
         return false;
     }
-    if (*dtype != TOY_DTYPE_F32) {
-        zend_argument_value_error(arg_num, "must be \"f32\", dtype \"%s\" is not implemented",
+    if (*dtype != TOY_DTYPE_F32 && *dtype != TOY_DTYPE_Q8_0) {
+        zend_argument_value_error(arg_num,
+                                  "must be \"f32\" or \"q8_0\", dtype \"%s\" is not implemented",
                                   ZSTR_VAL(name));
         return false;
     }
@@ -290,10 +291,8 @@ PHP_METHOD(Toy_Tensor, ones)
         RETURN_THROWS();
     }
 
-    float *data = toy_tensor_data(tensor);
-    size_t numel = toy_tensor_numel(tensor);
-    for (size_t i = 0; i < numel; i++) {
-        data[i] = 1.0f;
+    if (toy_tensor_fill(tensor, 1.0f) != TOY_OK) {
+        zend_throw_error(NULL, "Tensor fill failed");
     }
 }
 
@@ -323,10 +322,8 @@ PHP_METHOD(Toy_Tensor, full)
         RETURN_THROWS();
     }
 
-    float *data = toy_tensor_data(tensor);
-    size_t numel = toy_tensor_numel(tensor);
-    for (size_t i = 0; i < numel; i++) {
-        data[i] = (float) value;
+    if (toy_tensor_fill(tensor, (float) value) != TOY_OK) {
+        zend_throw_error(NULL, "Tensor fill failed");
     }
 }
 
@@ -468,12 +465,18 @@ PHP_METHOD(Toy_Tensor, cast)
     }
 
     toy_status status;
-    toy_tensor *copy = toy_tensor_clone(tensor, &status);
+    toy_tensor *copy = toy_tensor_cast(tensor, dtype, &status);
     if (!copy) {
         if (status == TOY_ERROR_MEMORY) {
             zend_throw_error(NULL, "Tensor allocation failed");
+        } else if (status == TOY_ERROR_SHAPE) {
+            zend_argument_value_error(1,
+                "cannot cast a f32 tensor whose last dimension is not a multiple of %d to q8_0",
+                TOY_TENSOR_Q8_0_BLOCK_VALUES);
         } else {
-            zend_throw_error(NULL, "Tensor cast failed");
+            zend_argument_value_error(1, "cannot cast a %s tensor to \"%s\"",
+                                      toy_dtype_name((toy_dtype) tensor->dtype),
+                                      ZSTR_VAL(dtype_name));
         }
         RETURN_THROWS();
     }
@@ -597,9 +600,10 @@ static void php_toy_info_kernel_arena(void)
 
     toy_kernel_stats kernel;
     toy_kernel_stats_read(&kernel);
-    snprintf(buffer, sizeof(buffer), "%s, avx2 %s, generated %llu",
+    snprintf(buffer, sizeof(buffer), "%s, avx2 %s, f16c %s, generated %llu",
              kernel.enabled ? "enabled" : "disabled",
              kernel.avx2_available ? "available" : "unavailable",
+             kernel.f16c_available ? "available" : "unavailable",
              (unsigned long long) kernel.generated);
     php_info_print_table_row(2, "kernels", buffer);
 }
@@ -609,7 +613,7 @@ PHP_MINFO_FUNCTION(toy)
     php_info_print_table_start();
     php_info_print_table_row(2, "toy support", "enabled");
     php_info_print_table_row(2, "Tensor class", "Toy\\Tensor");
-    php_info_print_table_row(2, "dtype", "f32");
+    php_info_print_table_row(2, "dtype", "f32, q8_0");
     php_toy_info_kernel_arena();
     php_info_print_table_end();
     DISPLAY_INI_ENTRIES();

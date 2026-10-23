@@ -13,7 +13,7 @@ function show(callable $fn): void {
     }
 }
 $t = Toy\Tensor::zeros('f32', [2, 2]);
-show(fn() => Toy\Tensor::zeros('q8_0', [32]));
+show(fn() => Toy\Tensor::zeros('f16', [32]));
 show(fn() => Toy\Tensor::zeros('f64', [1]));
 show(fn() => Toy\Tensor::zeros('f32', []));
 show(fn() => Toy\Tensor::zeros('f32', [0]));

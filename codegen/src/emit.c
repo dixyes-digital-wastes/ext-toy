@@ -5,6 +5,42 @@
 #include <string.h>
 
 #include "toy/asm.h"
+#include "toy/q8_0.h"
+
+#if defined(_WIN32) && (defined(_M_X64) || defined(__x86_64__))
+# define TOY_WIN64_ABI 1
+#endif
+
+#if defined(TOY_WIN64_ABI)
+enum {
+    TOY_WIN64_XMM_FIRST = 6,
+    TOY_WIN64_XMM_LAST = 15,
+    TOY_WIN64_STACK_BYTES = 160,
+};
+
+static void emit_win64_prologue(struct toy_asm *as) {
+    toy_asm_push_r64(as, TOY_RDI);
+    toy_asm_push_r64(as, TOY_RSI);
+    toy_asm_sub_imm(as, TOY_RSP, TOY_WIN64_STACK_BYTES);
+    for (uint8_t r = TOY_WIN64_XMM_FIRST; r <= TOY_WIN64_XMM_LAST; r++) {
+        const int32_t offset = (int32_t)((r - TOY_WIN64_XMM_FIRST) * 16);
+        toy_asm_vmovups_store_xmm(as, toy_mem_base(TOY_RSP, offset), r);
+    }
+    toy_asm_mov_rr(as, TOY_RDI, TOY_RCX);
+    toy_asm_mov_rr(as, TOY_RSI, TOY_RDX);
+    toy_asm_mov_rr(as, TOY_RDX, TOY_R8);
+}
+
+static void emit_win64_epilogue(struct toy_asm *as) {
+    for (uint8_t r = TOY_WIN64_XMM_FIRST; r <= TOY_WIN64_XMM_LAST; r++) {
+        const int32_t offset = (int32_t)((r - TOY_WIN64_XMM_FIRST) * 16);
+        toy_asm_vmovups_load_xmm(as, r, toy_mem_base(TOY_RSP, offset));
+    }
+    toy_asm_add_imm(as, TOY_RSP, TOY_WIN64_STACK_BYTES);
+    toy_asm_pop_r64(as, TOY_RSI);
+    toy_asm_pop_r64(as, TOY_RDI);
+}
+#endif
 
 enum {
     LABEL_I = 0,
@@ -412,11 +448,220 @@ static void emit_rmsnorm(struct toy_asm *as, uint32_t n, bool wide, uint32_t eps
     }
 }
 
+/* ---------- q8_0 ---------- */
+
+static bool op_is_q8_0(uint32_t op) {
+    return op >= TOY_OP_Q8_0_DOT && op <= TOY_OP_Q8_0_MATMUL;
+}
+
+static void emit_q8_scalar(struct toy_asm *as, uint32_t rows, uint32_t cols, uint32_t n,
+                           uint32_t k, uint32_t startCol,
+                           uint8_t labelRow, uint8_t labelCol, uint8_t labelBlock) {
+    if (rows == 0 || cols == 0) {
+        return;
+    }
+    const uint32_t blocks = k / TOY_Q8_0_BLOCK;
+    const int32_t rowBytes = (int32_t)(blocks * TOY_Q8_0_BLOCK_BYTES);
+    const int32_t rowTotal = (int32_t)(rows * blocks * TOY_Q8_0_BLOCK_BYTES);
+    const int32_t xBlockStep = (int32_t)(TOY_Q8_0_BLOCK * n * 4);
+    const int32_t startColBytes = (int32_t)(startCol * 4);
+
+    toy_asm_xor_rr(as, TOY_RCX, TOY_RCX);
+    toy_asm_mov_rr(as, TOY_R9, TOY_RDX);
+    if (startColBytes != 0) {
+        toy_asm_add_imm(as, TOY_R9, startColBytes);
+    }
+    toy_asm_label(as, labelRow);
+    toy_asm_xor_rr(as, TOY_RAX, TOY_RAX);
+    toy_asm_label(as, labelCol);
+    toy_asm_vxorps(as, false, TOY_XMM4, TOY_XMM4, TOY_XMM4);
+    toy_asm_mov_rr(as, TOY_R8, TOY_RDI);
+    toy_asm_lea(as, TOY_R10, toy_mem_index(TOY_RSI, TOY_RAX, 4, startColBytes));
+    toy_asm_xor_rr(as, TOY_R11, TOY_R11);
+    if (blocks > 1) {
+        toy_asm_label(as, labelBlock);
+    }
+    toy_asm_vxorps(as, false, TOY_XMM0, TOY_XMM0, TOY_XMM0);
+    for (int g = 0; g < 8; g++) {
+        toy_asm_vpmovsxbd(as, false, TOY_XMM1, toy_mem_base(TOY_R8, (int32_t)(2 + 4 * g)));
+        toy_asm_vcvtdq2ps(as, false, TOY_XMM1, TOY_XMM1);
+        for (int l = 0; l < 4; l++) {
+            const int p = 4 * g + l;
+            toy_asm_vpermilps(as, TOY_XMM2, TOY_XMM1, (uint8_t)(l * 0x55));
+            toy_asm_vfmadd231ss_mem(as, TOY_XMM0, TOY_XMM2,
+                                    toy_mem_base(TOY_R10, (int32_t)(p * n * 4)));
+        }
+    }
+    toy_asm_vcvtph2ps(as, TOY_XMM3, toy_mem_base(TOY_R8, 0));
+    toy_asm_vfmadd231ss(as, TOY_XMM4, TOY_XMM3, TOY_XMM0);
+    if (blocks > 1) {
+        toy_asm_add_imm(as, TOY_R8, TOY_Q8_0_BLOCK_BYTES);
+        toy_asm_add_imm(as, TOY_R10, xBlockStep);
+        toy_asm_add_imm(as, TOY_R11, 1);
+        toy_asm_cmp_imm(as, TOY_R11, (int32_t)blocks);
+        toy_asm_jcc(as, TOY_CC_NE, labelBlock);
+    }
+    toy_asm_vmovss_store(as, toy_mem_index(TOY_R9, TOY_RAX, 4, 0), TOY_XMM4);
+    if (cols > 1) {
+        toy_asm_add_imm(as, TOY_RAX, 1);
+        toy_asm_cmp_imm(as, TOY_RAX, (int32_t)cols);
+        toy_asm_jcc(as, TOY_CC_NE, labelCol);
+    }
+    toy_asm_add_imm(as, TOY_RDI, rowBytes);
+    toy_asm_add_imm(as, TOY_R9, (int32_t)(n * 4));
+    toy_asm_add_imm(as, TOY_RCX, 1);
+    if (rows > 1) {
+        toy_asm_cmp_imm(as, TOY_RCX, (int32_t)rows);
+        toy_asm_jcc(as, TOY_CC_NE, labelRow);
+    }
+    toy_asm_sub_imm(as, TOY_RDI, rowTotal);
+}
+
+static void emit_q8_avx2_dotmatvec(struct toy_asm *as, uint32_t rows, uint32_t k) {
+    const uint32_t blocks = k / TOY_Q8_0_BLOCK;
+    const int32_t rowBytes = (int32_t)(blocks * TOY_Q8_0_BLOCK_BYTES);
+    const int32_t rowTotal = (int32_t)(rows * blocks * TOY_Q8_0_BLOCK_BYTES);
+
+    toy_asm_xor_rr(as, TOY_RCX, TOY_RCX);
+    toy_asm_label(as, 0);
+    toy_asm_vxorps(as, false, TOY_XMM7, TOY_XMM7, TOY_XMM7);
+    toy_asm_mov_rr(as, TOY_R8, TOY_RDI);
+    toy_asm_mov_rr(as, TOY_R10, TOY_RSI);
+    toy_asm_xor_rr(as, TOY_RAX, TOY_RAX);
+    if (blocks > 1) {
+        toy_asm_label(as, 1);
+    }
+    for (uint8_t g = 0; g < 4; g++) {
+        toy_asm_vxorps(as, true, g, g, g);
+    }
+    for (uint8_t g = 0; g < 4; g++) {
+        toy_asm_vmovups_load_ymm(as, TOY_YMM4, toy_mem_base(TOY_R10, (int32_t)(g * 32)));
+        toy_asm_vpmovsxbd(as, true, TOY_YMM5, toy_mem_base(TOY_R8, (int32_t)(2 + g * 8)));
+        toy_asm_vcvtdq2ps(as, true, TOY_YMM5, TOY_YMM5);
+        toy_asm_vfmadd231ps(as, g, TOY_YMM5, TOY_YMM4);
+    }
+    toy_asm_vaddps(as, true, TOY_YMM0, TOY_YMM0, TOY_YMM1);
+    toy_asm_vaddps(as, true, TOY_YMM2, TOY_YMM2, TOY_YMM3);
+    toy_asm_vaddps(as, true, TOY_YMM0, TOY_YMM0, TOY_YMM2);
+    toy_asm_vextractf128(as, TOY_XMM4, TOY_YMM0, 1);
+    toy_asm_vaddps(as, false, TOY_XMM0, TOY_XMM0, TOY_XMM4);
+    toy_asm_vhaddps(as, TOY_XMM0, TOY_XMM0, TOY_XMM0);
+    toy_asm_vhaddps(as, TOY_XMM0, TOY_XMM0, TOY_XMM0);
+    toy_asm_vcvtph2ps(as, TOY_XMM6, toy_mem_base(TOY_R8, 0));
+    toy_asm_vfmadd231ss(as, TOY_XMM7, TOY_XMM6, TOY_XMM0);
+    if (blocks > 1) {
+        toy_asm_add_imm(as, TOY_R8, TOY_Q8_0_BLOCK_BYTES);
+        toy_asm_add_imm(as, TOY_R10, TOY_Q8_0_BLOCK * 4);
+        toy_asm_add_imm(as, TOY_RAX, 1);
+        toy_asm_cmp_imm(as, TOY_RAX, (int32_t)blocks);
+        toy_asm_jcc(as, TOY_CC_NE, 1);
+    }
+    toy_asm_vmovss_store(as, toy_mem_index(TOY_RDX, TOY_RCX, 4, 0), TOY_XMM7);
+    toy_asm_add_imm(as, TOY_RDI, rowBytes);
+    toy_asm_add_imm(as, TOY_RCX, 1);
+    if (rows > 1) {
+        toy_asm_cmp_imm(as, TOY_RCX, (int32_t)rows);
+        toy_asm_jcc(as, TOY_CC_NE, 0);
+    }
+    toy_asm_sub_imm(as, TOY_RDI, rowTotal);
+}
+
+static void emit_q8_matmul_body(struct toy_asm *as, uint32_t n, uint32_t blocks,
+                                int32_t xBlockStep, uint8_t labelBlock) {
+    toy_asm_vxorps(as, true, TOY_YMM0, TOY_YMM0, TOY_YMM0);
+    toy_asm_vxorps(as, true, TOY_YMM1, TOY_YMM1, TOY_YMM1);
+    toy_asm_mov_rr(as, TOY_R8, TOY_RDI);
+    toy_asm_lea(as, TOY_RCX, toy_mem_index(TOY_RSI, TOY_R10, 4, 0));
+    toy_asm_xor_rr(as, TOY_R11, TOY_R11);
+    if (blocks > 1) {
+        toy_asm_label(as, labelBlock);
+    }
+    toy_asm_vxorps(as, true, TOY_YMM2, TOY_YMM2, TOY_YMM2);
+    toy_asm_vxorps(as, true, TOY_YMM3, TOY_YMM3, TOY_YMM3);
+    for (int g = 0; g < 8; g++) {
+        toy_asm_vpmovsxbd(as, false, TOY_XMM4, toy_mem_base(TOY_R8, (int32_t)(2 + 4 * g)));
+        toy_asm_vcvtdq2ps(as, false, TOY_XMM4, TOY_XMM4);
+        for (int l = 0; l < 4; l++) {
+            const int p = 4 * g + l;
+            toy_asm_vpermilps(as, TOY_XMM5, TOY_XMM4, (uint8_t)(l * 0x55));
+            toy_asm_vbroadcastss_reg(as, TOY_YMM5, TOY_XMM5);
+            toy_asm_vmovups_load_ymm(as, TOY_YMM6, toy_mem_base(TOY_RCX, (int32_t)(p * n * 4)));
+            toy_asm_vmovups_load_ymm(as, TOY_YMM7,
+                                     toy_mem_base(TOY_RCX, (int32_t)(p * n * 4 + 32)));
+            toy_asm_vfmadd231ps(as, TOY_YMM2, TOY_YMM5, TOY_YMM6);
+            toy_asm_vfmadd231ps(as, TOY_YMM3, TOY_YMM5, TOY_YMM7);
+        }
+    }
+    toy_asm_vcvtph2ps(as, TOY_XMM4, toy_mem_base(TOY_R8, 0));
+    toy_asm_vbroadcastss_reg(as, TOY_YMM4, TOY_XMM4);
+    toy_asm_vfmadd231ps(as, TOY_YMM0, TOY_YMM4, TOY_YMM2);
+    toy_asm_vfmadd231ps(as, TOY_YMM1, TOY_YMM4, TOY_YMM3);
+    if (blocks > 1) {
+        toy_asm_add_imm(as, TOY_R8, TOY_Q8_0_BLOCK_BYTES);
+        toy_asm_add_imm(as, TOY_RCX, xBlockStep);
+        toy_asm_add_imm(as, TOY_R11, 1);
+        toy_asm_cmp_imm(as, TOY_R11, (int32_t)blocks);
+        toy_asm_jcc(as, TOY_CC_NE, labelBlock);
+    }
+    toy_asm_vmovups_store_ymm(as, toy_mem_index(TOY_RDX, TOY_R10, 4, 0), TOY_YMM0);
+    toy_asm_vmovups_store_ymm(as, toy_mem_index(TOY_RDX, TOY_R10, 4, 32), TOY_YMM1);
+}
+
+static void emit_q8_avx2_matmul(struct toy_asm *as, uint32_t m, uint32_t n, uint32_t k) {
+    const uint32_t blocks = k / TOY_Q8_0_BLOCK;
+    const uint32_t n16 = n & ~15u;
+    const int32_t rowBytes = (int32_t)(blocks * TOY_Q8_0_BLOCK_BYTES);
+    const int32_t rowTotal = (int32_t)(m * blocks * TOY_Q8_0_BLOCK_BYTES);
+    const int32_t xBlockStep = (int32_t)(TOY_Q8_0_BLOCK * n * 4);
+    const int32_t cRowStep = (int32_t)(n * 4);
+    const int32_t cTotal = (int32_t)(m * n * 4);
+    const uint32_t tileRows = m > 64 ? 64 : m;
+    const uint32_t tileMain = (m / tileRows) * tileRows;
+    const uint32_t tileTail = m - tileMain;
+
+    if (n16 != 0) {
+        toy_asm_xor_rr(as, TOY_R10, TOY_R10);
+        toy_asm_label(as, 1);
+        toy_asm_xor_rr(as, TOY_R9, TOY_R9);
+        toy_asm_label(as, 3);
+        toy_asm_xor_rr(as, TOY_RAX, TOY_RAX);
+        toy_asm_label(as, 0);
+        emit_q8_matmul_body(as, n, blocks, xBlockStep, 2);
+        toy_asm_add_imm(as, TOY_RDI, rowBytes);
+        toy_asm_add_imm(as, TOY_RDX, cRowStep);
+        toy_asm_add_imm(as, TOY_RAX, 1);
+        toy_asm_cmp_imm(as, TOY_RAX, (int32_t)tileRows);
+        toy_asm_jcc(as, TOY_CC_NE, 0);
+        toy_asm_add_imm(as, TOY_R9, (int32_t)tileRows);
+        toy_asm_cmp_imm(as, TOY_R9, (int32_t)tileMain);
+        toy_asm_jcc(as, TOY_CC_NE, 3);
+        if (tileTail != 0) {
+            toy_asm_xor_rr(as, TOY_RAX, TOY_RAX);
+            toy_asm_label(as, 4);
+            emit_q8_matmul_body(as, n, blocks, xBlockStep, 5);
+            toy_asm_add_imm(as, TOY_RDI, rowBytes);
+            toy_asm_add_imm(as, TOY_RDX, cRowStep);
+            toy_asm_add_imm(as, TOY_RAX, 1);
+            toy_asm_cmp_imm(as, TOY_RAX, (int32_t)tileTail);
+            toy_asm_jcc(as, TOY_CC_NE, 4);
+        }
+        toy_asm_sub_imm(as, TOY_RDI, rowTotal);
+        toy_asm_sub_imm(as, TOY_RDX, cTotal);
+        if (n16 > 16) {
+            toy_asm_add_imm(as, TOY_R10, 16);
+            toy_asm_cmp_imm(as, TOY_R10, (int32_t)n16);
+            toy_asm_jcc(as, TOY_CC_NE, 1);
+        }
+    }
+
+    emit_q8_scalar(as, m, n - n16, n, k, n16, 6, 7, 8);
+}
+
 static bool spec_valid(const struct toy_spec *spec) {
     if (spec == NULL) {
         return false;
     }
-    if (spec->op < TOY_OP_GEMM || spec->op > TOY_OP_RMSNORM) {
+    if (spec->op < TOY_OP_GEMM || spec->op > TOY_OP_Q8_0_MATMUL) {
         return false;
     }
     if (spec->isa != TOY_ISA_SCALAR && spec->isa != TOY_ISA_AVX2) {
@@ -425,28 +670,51 @@ static bool spec_valid(const struct toy_spec *spec) {
     if (spec->m == 0 || spec->n == 0 || spec->k == 0) {
         return false;
     }
-    if (spec->op <= TOY_OP_DOT) {
+    if (op_is_q8_0(spec->op)) {
         if (spec->m > 65535 || spec->n > 65535 || spec->k > 65535) {
             return false;
         }
-        if (spec->op == TOY_OP_MATVEC && spec->n != 1) {
-            return false;
-        }
-        if (spec->op == TOY_OP_DOT && (spec->m != 1 || spec->n != 1)) {
-            return false;
-        }
         const uint64_t m = spec->m, n = spec->n, k = spec->k;
-        if (m * k * 4 > (uint64_t)INT32_MAX || m * n * 4 > (uint64_t)INT32_MAX ||
-            n * k * 4 > (uint64_t)INT32_MAX || 8 * k * 4 > (uint64_t)INT32_MAX ||
-            8 * n * 4 > (uint64_t)INT32_MAX) {
+        if (k % TOY_Q8_0_BLOCK != 0) {
+            return false;
+        }
+        if (spec->op == TOY_OP_Q8_0_DOT && (m != 1 || n != 1)) {
+            return false;
+        }
+        if (spec->op == TOY_OP_Q8_0_MATVEC && n != 1) {
+            return false;
+        }
+        const uint64_t rowBytes = (k / TOY_Q8_0_BLOCK) * TOY_Q8_0_BLOCK_BYTES;
+        if (m * rowBytes > (uint64_t)INT32_MAX || m * n * 4 > (uint64_t)INT32_MAX) {
             return false;
         }
         return true;
     }
-    if (spec->n != 1 || spec->k != 1) {
+
+    if (spec->op >= TOY_OP_ADD) {
+        if (spec->n != 1 || spec->k != 1) {
+            return false;
+        }
+        if (spec->m > (uint32_t)(INT32_MAX / 4)) {
+            return false;
+        }
+        return true;
+    }
+
+    if (spec->m > 65535 || spec->n > 65535 || spec->k > 65535) {
         return false;
     }
-    if (spec->m > (uint32_t)(INT32_MAX / 4)) {
+    const uint64_t m = spec->m, n = spec->n, k = spec->k;
+
+    if (spec->op == TOY_OP_MATVEC && spec->n != 1) {
+        return false;
+    }
+    if (spec->op == TOY_OP_DOT && (spec->m != 1 || spec->n != 1)) {
+        return false;
+    }
+    if (m * k * 4 > (uint64_t)INT32_MAX || m * n * 4 > (uint64_t)INT32_MAX ||
+        n * k * 4 > (uint64_t)INT32_MAX || 8 * k * 4 > (uint64_t)INT32_MAX ||
+        8 * n * 4 > (uint64_t)INT32_MAX) {
         return false;
     }
     return true;
@@ -458,6 +726,42 @@ size_t toy_emit(const struct toy_spec *spec, uint8_t *buf, size_t cap) {
     }
     struct toy_asm as;
     toy_asm_init(&as, buf, cap);
+
+#if defined(TOY_WIN64_ABI)
+    emit_win64_prologue(&as);
+#endif
+
+    if (op_is_q8_0(spec->op)) {
+        switch (spec->isa) {
+            case TOY_ISA_SCALAR:
+                if (spec->op == TOY_OP_Q8_0_DOT) {
+                    emit_q8_scalar(&as, 1, 1, 1, spec->k, 0, 0, 1, 2);
+                } else if (spec->op == TOY_OP_Q8_0_MATVEC) {
+                    emit_q8_scalar(&as, spec->m, 1, 1, spec->k, 0, 0, 1, 2);
+                } else {
+                    emit_q8_scalar(&as, spec->m, spec->n, spec->n, spec->k, 0, 0, 1, 2);
+                }
+                break;
+            case TOY_ISA_AVX2:
+                if (spec->op == TOY_OP_Q8_0_DOT) {
+                    emit_q8_avx2_dotmatvec(&as, 1, spec->k);
+                } else if (spec->op == TOY_OP_Q8_0_MATVEC) {
+                    emit_q8_avx2_dotmatvec(&as, spec->m, spec->k);
+                } else {
+                    emit_q8_avx2_matmul(&as, spec->m, spec->n, spec->k);
+                }
+                break;
+        }
+#if defined(TOY_WIN64_ABI)
+        emit_win64_epilogue(&as);
+#endif
+        toy_asm_vzeroupper(&as);
+        toy_asm_ret(&as);
+        if (!toy_asm_finish(&as)) {
+            return 0;
+        }
+        return as.len;
+    }
 
     const bool wide = spec->isa == TOY_ISA_AVX2;
     switch (spec->op) {
@@ -494,6 +798,9 @@ size_t toy_emit(const struct toy_spec *spec, uint8_t *buf, size_t cap) {
             emit_rmsnorm(&as, spec->m, wide, spec->param_bits);
             break;
     }
+#if defined(TOY_WIN64_ABI)
+    emit_win64_epilogue(&as);
+#endif
     toy_asm_vzeroupper(&as);
     toy_asm_ret(&as);
     if (!toy_asm_finish(&as)) {
@@ -510,6 +817,9 @@ const char *toy_op_name(uint32_t op) {
         case TOY_OP_ADD: return "add";
         case TOY_OP_SCALE: return "scale";
         case TOY_OP_RMSNORM: return "rmsnorm";
+        case TOY_OP_Q8_0_DOT: return "q8_0_dot";
+        case TOY_OP_Q8_0_MATVEC: return "q8_0_matvec";
+        case TOY_OP_Q8_0_MATMUL: return "q8_0_matmul";
         default: return "unknown";
     }
 }
@@ -527,9 +837,15 @@ double toy_spec_flops(const struct toy_spec *spec) {
         return 0.0;
     }
     switch (spec->op) {
-        case TOY_OP_GEMM: return 2.0 * spec->m * spec->n * spec->k;
-        case TOY_OP_MATVEC: return 2.0 * spec->m * spec->k;
-        case TOY_OP_DOT: return 2.0 * spec->k;
+        case TOY_OP_GEMM:
+        case TOY_OP_Q8_0_MATMUL:
+            return 2.0 * spec->m * spec->n * spec->k;
+        case TOY_OP_MATVEC:
+        case TOY_OP_Q8_0_MATVEC:
+            return 2.0 * spec->m * spec->k;
+        case TOY_OP_DOT:
+        case TOY_OP_Q8_0_DOT:
+            return 2.0 * spec->k;
         case TOY_OP_ADD: return 2.0 * spec->m;
         case TOY_OP_SCALE: return 1.0 * spec->m;
         case TOY_OP_RMSNORM: return 4.0 * spec->m;

@@ -8,8 +8,14 @@ if (PHP_TOY != "no") {
 	 * standard stays on this extension. The force-included header supplies
 	 * max_align_t, which MSVC lacks and the shipped PHP 8.4 headers use from
 	 * C11 on
+	 *
+	 * /FI is resolved like an include from the source file, so sources under
+	 * codegen/src need the extension root on the include path
+	 *
+	 * The sources hold UTF-8 comments; without an explicit source charset MSVC
+	 * reads them with the ANSI code page and a comment can swallow the next line
 	 */
 	EXTENSION("toy",
-		"tensor.c tensor_ops.c codegen/src/asm.c codegen/src/emit.c toy_arena.c toy_kernel.c toy_kernel_arena.c toy_spec_cache.c toy_tensor.c toy_tensor_ops.c",
-		PHP_TOY_SHARED, "/std:clatest /FI tensor_msvc_compat.h /I codegen\\include");
+		"tensor.c tensor_ops.c codegen\\src\\asm.c codegen\\src\\emit.c codegen\\src\\isa.c codegen\\src\\q8_0.c codegen\\src\\ref.c toy_arena.c toy_kernel.c toy_kernel_arena.c toy_spec_cache.c toy_tensor.c toy_tensor_ops.c",
+		PHP_TOY_SHARED, "/std:clatest /source-charset:utf-8 /I . /FI tensor_msvc_compat.h /I codegen\\include");
 }

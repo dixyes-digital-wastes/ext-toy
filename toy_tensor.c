@@ -3,6 +3,8 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "toy/q8_0.h"
+
 #if defined(_MSC_VER)
 # include <malloc.h>
 #endif
@@ -288,6 +290,93 @@ toy_tensor *toy_tensor_clone(const toy_tensor *tensor, toy_status *status)
     }
     memcpy(copy->data, tensor->data, tensor->bytes);
     return copy;
+}
+
+toy_status toy_tensor_fill(toy_tensor *tensor, float value)
+{
+    const size_t numel = toy_tensor_numel(tensor);
+
+    switch ((toy_dtype) tensor->dtype) {
+        case TOY_DTYPE_F32: {
+            float *data = toy_tensor_data(tensor);
+            for (size_t i = 0; i < numel; i++) {
+                data[i] = value;
+            }
+            return TOY_OK;
+        }
+        case TOY_DTYPE_Q8_0: {
+            /* Every block holds the same 32 values, so quantize one block */
+            float values[TOY_TENSOR_Q8_0_BLOCK_VALUES];
+            for (uint32_t i = 0; i < TOY_TENSOR_Q8_0_BLOCK_VALUES; i++) {
+                values[i] = value;
+            }
+            struct toy_q8_0_block block;
+            toy_q8_0_quantize_rows(1, TOY_TENSOR_Q8_0_BLOCK_VALUES, values, &block);
+
+            const size_t blocks = tensor->bytes / TOY_TENSOR_Q8_0_BLOCK_BYTES;
+            uint8_t *data = toy_tensor_data(tensor);
+            for (size_t b = 0; b < blocks; b++) {
+                memcpy(data + b * TOY_TENSOR_Q8_0_BLOCK_BYTES, &block,
+                       TOY_TENSOR_Q8_0_BLOCK_BYTES);
+            }
+            return TOY_OK;
+        }
+        default:
+            return TOY_ERROR_DTYPE;
+    }
+}
+
+toy_tensor *toy_tensor_cast(const toy_tensor *tensor, toy_dtype dtype, toy_status *status)
+{
+    if (tensor->dtype == (uint8_t) dtype) {
+        return toy_tensor_clone(tensor, status);
+    }
+    if (dtype < TOY_DTYPE_F32 || dtype > TOY_DTYPE_I8) {
+        if (status) {
+            *status = TOY_ERROR_DTYPE;
+        }
+        return NULL;
+    }
+
+    toy_tensor *converted = toy_tensor_alloc(dtype, tensor->rank, tensor->dims, status);
+    if (!converted) {
+        return NULL;
+    }
+
+    const uint32_t last = tensor->dims[tensor->rank - 1];
+    const size_t rows = toy_tensor_numel(tensor) / last;
+    if (rows > UINT32_MAX) {
+        toy_tensor_release(converted);
+        if (status) {
+            *status = TOY_ERROR_OVERFLOW;
+        }
+        return NULL;
+    }
+
+    switch ((toy_dtype) tensor->dtype) {
+        case TOY_DTYPE_F32:
+            if (dtype == TOY_DTYPE_Q8_0) {
+                toy_q8_0_quantize_rows((uint32_t) rows, last, toy_tensor_data(tensor),
+                                       toy_tensor_data(converted));
+                return converted;
+            }
+            break;
+        case TOY_DTYPE_Q8_0:
+            if (dtype == TOY_DTYPE_F32) {
+                toy_q8_0_dequantize_rows((uint32_t) rows, last, toy_tensor_data(tensor),
+                                         toy_tensor_data(converted));
+                return converted;
+            }
+            break;
+        default:
+            break;
+    }
+
+    toy_tensor_release(converted);
+    if (status) {
+        *status = TOY_ERROR_DTYPE;
+    }
+    return NULL;
 }
 
 size_t toy_tensor_numel(const toy_tensor *tensor)

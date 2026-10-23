@@ -43,6 +43,9 @@ if test "$PHP_TOY" != "no"; then
     tensor_ops.c
     codegen/src/asm.c
     codegen/src/emit.c
+    codegen/src/isa.c
+    codegen/src/q8_0.c
+    codegen/src/ref.c
     toy_arena.c
     toy_kernel.c
     toy_kernel_arena.c

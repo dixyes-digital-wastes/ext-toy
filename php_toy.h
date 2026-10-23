@@ -43,6 +43,8 @@ static inline toy_tensor *php_toy_tensor_fetch(zval *value)
 
 PHP_FUNCTION(toy_tensor_matmul_f32);
 PHP_FUNCTION(toy_tensor_matvec_f32);
+PHP_FUNCTION(toy_tensor_matmul_q8_0_f32);
+PHP_FUNCTION(toy_tensor_matvec_q8_0_f32);
 PHP_FUNCTION(toy_tensor_add);
 PHP_FUNCTION(toy_tensor_scale);
 PHP_FUNCTION(toy_tensor_rmsnorm);

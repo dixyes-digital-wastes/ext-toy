@@ -6,10 +6,6 @@
 
 #include "toy/codegen.h"
 
-#if defined(__x86_64__) || defined(__i386__) || defined(_M_X64) || defined(_M_IX86)
-# define TOY_KERNEL_ARCH_X86 1
-#endif
-
 static_assert(sizeof(void *) == sizeof(toy_kernel_entry),
               "a code pointer and a kernel entry have the same size");
 
@@ -43,7 +39,6 @@ static toy_kernel_stats toy_kernel_counters;
 
 static bool toy_kernel_cpu_ready;
 static bool toy_kernel_cpu_avx2;
-static bool toy_kernel_cpu_fma;
 
 static bool toy_kernel_fill(const uint8_t *key, void *context, uint8_t *code, size_t capacity)
 {
@@ -59,12 +54,7 @@ static void toy_kernel_detect_cpu(void)
         return;
     }
 
-#if defined(TOY_KERNEL_ARCH_X86) && (defined(__GNUC__) || defined(__clang__))
-    __builtin_cpu_init();
-    toy_kernel_cpu_fma = __builtin_cpu_supports("fma");
-    toy_kernel_cpu_avx2 = toy_kernel_cpu_fma && __builtin_cpu_supports("avx2");
-#endif
-
+    toy_kernel_cpu_avx2 = toy_isa_available(TOY_ISA_AVX2);
     toy_kernel_cpu_ready = true;
 }
 
@@ -81,6 +71,10 @@ static uint8_t toy_kernel_op(uint8_t kind)
             return TOY_OP_GEMM;
         case TOY_KERNEL_MATVEC:
             return TOY_OP_MATVEC;
+        case TOY_KERNEL_MATMUL_Q8_0:
+            return TOY_OP_Q8_0_MATMUL;
+        case TOY_KERNEL_MATVEC_Q8_0:
+            return TOY_OP_Q8_0_MATVEC;
         default:
             return 0;
     }
@@ -102,6 +96,19 @@ static toy_kernel_entry toy_kernel_resolve(uint8_t kind, uint8_t dtype, uint32_t
 
     uint32_t isa = toy_kernel_isa();
     if (isa == 0) {
+        return NULL;
+    }
+
+    struct toy_spec spec = {
+        .op = toy_kernel_op(kind),
+        .isa = isa,
+        .m = m,
+        .n = n,
+        .k = k,
+        .param_bits = param_bits,
+    };
+    /* Unsupported ISA or missing F16C for q8_0: the caller uses the scalar path */
+    if (!toy_spec_supported(&spec)) {
         return NULL;
     }
 
@@ -130,14 +137,6 @@ static toy_kernel_entry toy_kernel_resolve(uint8_t kind, uint8_t dtype, uint32_t
     }
     toy_kernel_counters.arena_misses++;
 
-    struct toy_spec spec = {
-        .op = toy_kernel_op(kind),
-        .isa = isa,
-        .m = m,
-        .n = n,
-        .k = k,
-        .param_bits = param_bits,
-    };
     uint8_t *code = toy_spec_cache_get_code(cache, bytes, TOY_EMIT_CAP, toy_kernel_fill, &spec);
     if (code == NULL) {
         toy_kernel_counters.generation_failures++;
@@ -197,6 +196,7 @@ void toy_kernel_stats_read(toy_kernel_stats *stats)
     *stats = toy_kernel_counters;
     stats->enabled = toy_kernel_current.enabled;
     stats->avx2_available = toy_kernel_avx2_available();
+    stats->f16c_available = toy_f16c_available();
     stats->isa = toy_isa_name(toy_kernel_isa());
 }
 
@@ -224,10 +224,7 @@ bool toy_kernel_set_isa(uint32_t isa)
     if (isa != TOY_ISA_SCALAR && isa != TOY_ISA_AVX2) {
         return false;
     }
-    if (isa == TOY_ISA_AVX2 && !toy_kernel_cpu_avx2) {
-        return false;
-    }
-    if (isa == TOY_ISA_SCALAR && !toy_kernel_cpu_fma) {
+    if (!toy_isa_available(isa)) {
         return false;
     }
 
@@ -243,7 +240,7 @@ uint32_t toy_kernel_isa(void)
         /* The scalar codegen also needs FMA, so no FMA means no kernels */
         if (toy_kernel_cpu_avx2) {
             toy_kernel_current.isa = TOY_ISA_AVX2;
-        } else if (toy_kernel_cpu_fma) {
+        } else if (toy_isa_available(TOY_ISA_SCALAR)) {
             toy_kernel_current.isa = TOY_ISA_SCALAR;
         }
     }
@@ -280,7 +277,8 @@ toy_kernel_entry toy_kernel_for_element(toy_tensor *tensor, uint8_t kind, uint32
     return entry;
 }
 
-toy_kernel_entry toy_kernel_for_shape(uint8_t kind, uint32_t m, uint32_t n, uint32_t k)
+toy_kernel_entry toy_kernel_for_shape(uint8_t kind, uint8_t dtype, uint32_t m, uint32_t n,
+                                      uint32_t k)
 {
-    return toy_kernel_resolve(kind, TOY_DTYPE_F32, m, n, k, 0);
+    return toy_kernel_resolve(kind, dtype, m, n, k, 0);
 }

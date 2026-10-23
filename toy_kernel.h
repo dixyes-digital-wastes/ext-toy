@@ -25,11 +25,14 @@ typedef enum toy_kernel_kind {
     TOY_KERNEL_RMSNORM = 3,
     TOY_KERNEL_MATMUL = 4,
     TOY_KERNEL_MATVEC = 5,
+    TOY_KERNEL_MATMUL_Q8_0 = 6,
+    TOY_KERNEL_MATVEC_Q8_0 = 7,
 } toy_kernel_kind;
 
 typedef struct toy_kernel_stats {
     bool enabled;
     bool avx2_available;
+    bool f16c_available;
     const char *isa;
     uint64_t flf_calls;
     uint64_t zif_calls;
@@ -77,6 +80,7 @@ toy_kernel_entry toy_kernel_for_element(toy_tensor *tensor, uint8_t kind, uint32
                                         uint32_t count);
 
 /* Resolves a shape-keyed kernel. It does not touch any tensor memo. */
-toy_kernel_entry toy_kernel_for_shape(uint8_t kind, uint32_t m, uint32_t n, uint32_t k);
+toy_kernel_entry toy_kernel_for_shape(uint8_t kind, uint8_t dtype, uint32_t m, uint32_t n,
+                                      uint32_t k);
 
 #endif /* TOY_KERNEL_H */
