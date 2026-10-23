@@ -48,6 +48,7 @@ PHP_FUNCTION(toy_tensor_matvec_q8_0_f32);
 PHP_FUNCTION(toy_tensor_add);
 PHP_FUNCTION(toy_tensor_scale);
 PHP_FUNCTION(toy_tensor_rmsnorm);
+PHP_FUNCTION(toy_tensor_rmsnorm_into);
 
 /* Introspection for tests and measurements */
 PHP_FUNCTION(toy_tensor_kernel_stats);
