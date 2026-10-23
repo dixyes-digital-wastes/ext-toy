@@ -549,7 +549,12 @@ PHP_MSHUTDOWN_FUNCTION(toy)
 
 PHP_RINIT_FUNCTION(toy)
 {
-#if defined(ZTS) && defined(COMPILE_DL_TOY)
+/*
+ * phpize builds pass ZEND_COMPILE_DL_EXT instead of COMPILE_DL_TOY, and
+ * they do not include the generated config.h. Accept both markers so the
+ * module exports its entry point and updates the TLS cache in either build.
+ */
+#if defined(ZTS) && (defined(COMPILE_DL_TOY) || defined(ZEND_COMPILE_DL_EXT))
     ZEND_TSRMLS_CACHE_UPDATE();
 #endif
 
@@ -623,7 +628,7 @@ zend_module_entry toy_module_entry = {
     STANDARD_MODULE_PROPERTIES
 };
 
-#ifdef COMPILE_DL_TOY
+#if defined(COMPILE_DL_TOY) || defined(ZEND_COMPILE_DL_EXT)
 # ifdef ZTS
 ZEND_TSRMLS_CACHE_DEFINE()
 # endif
