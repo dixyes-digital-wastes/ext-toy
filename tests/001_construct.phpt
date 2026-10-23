@@ -1,7 +1,7 @@
 --TEST--
 Toy\Tensor construction, metadata, reshape, and cast
 --EXTENSIONS--
-tensor
+toy
 --FILE--
 <?php
 function floats_to_bytes(array $values): string { return pack('g*', ...$values); }

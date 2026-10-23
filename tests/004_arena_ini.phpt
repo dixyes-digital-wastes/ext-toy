@@ -1,7 +1,7 @@
 --TEST--
 toy.kernel_arena_size INI directive and module info
 --EXTENSIONS--
-tensor
+toy
 --FILE--
 <?php
 var_dump(ini_get('toy.kernel_arena_size'));

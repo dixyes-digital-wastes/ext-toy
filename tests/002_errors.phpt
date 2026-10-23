@@ -1,7 +1,7 @@
 --TEST--
 Toy\Tensor validation errors and protected object state
 --EXTENSIONS--
-tensor
+toy
 --FILE--
 <?php
 function show(callable $fn): void {

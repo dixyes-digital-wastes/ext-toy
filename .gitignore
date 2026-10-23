@@ -1,0 +1,32 @@
+# phpize and configure artifacts
+.libs/
+/autom4te.cache/
+/build/
+/config.h
+/config.h.in
+/config.log
+/config.nice
+/config.status
+/configure
+/configure.ac
+/libtool
+/Makefile
+/Makefile.fragments
+/Makefile.objects
+/modules/
+/run-tests.php
+/tmp-php.ini
+
+# compiler and libtool outputs
+*.dep
+*.la
+*.lo
+*.o
+
+# run-tests work files
+/tests/*.diff
+/tests/*.exp
+/tests/*.log
+/tests/*.out
+/tests/*.php
+/tests/*.sh

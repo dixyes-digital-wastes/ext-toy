@@ -1,7 +1,7 @@
 --TEST--
 Toy\Tensor scalar reference operations
 --EXTENSIONS--
-tensor
+toy
 --FILE--
 <?php
 function tensor(array $shape, array $values): Toy\Tensor {

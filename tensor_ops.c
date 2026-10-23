@@ -1,7 +1,17 @@
+#ifdef HAVE_CONFIG_H
+# include "config.h"
+#endif
+
 #include "php.h"
 
-#include "php_tensor.h"
+#include "php_toy.h"
+#include "toy_kernel.h"
 #include "toy_tensor_ops.h"
+
+#include <math.h>
+#include <string.h>
+
+#include "toy/codegen.h"
 
 static const double toy_rmsnorm_default_eps = 1e-6;
 
@@ -36,17 +46,57 @@ ZEND_BEGIN_ARG_WITH_RETURN_OBJ_INFO_EX(arginfo_toy_tensor_rmsnorm, 0, 2, Toy\\Te
     ZEND_ARG_TYPE_INFO_WITH_DEFAULT_VALUE(0, eps, IS_DOUBLE, 0, "1e-6")
 ZEND_END_ARG_INFO()
 
-const zend_function_entry tensor_functions[] = {
+ZEND_BEGIN_ARG_WITH_RETURN_TYPE_INFO_EX(arginfo_toy_tensor_kernel_stats, 0, 0, IS_ARRAY, 0)
+    ZEND_ARG_TYPE_INFO_WITH_DEFAULT_VALUE(0, reset, _IS_BOOL, 0, "false")
+ZEND_END_ARG_INFO()
+
+ZEND_BEGIN_ARG_WITH_RETURN_TYPE_INFO_EX(arginfo_toy_tensor_kernel_enable, 0, 1, _IS_BOOL, 0)
+    ZEND_ARG_TYPE_INFO(0, enable, _IS_BOOL, 0)
+ZEND_END_ARG_INFO()
+
+ZEND_BEGIN_ARG_WITH_RETURN_TYPE_INFO_EX(arginfo_toy_tensor_kernel_isa, 0, 0, IS_STRING, 0)
+    ZEND_ARG_TYPE_INFO_WITH_DEFAULT_VALUE(0, isa, IS_STRING, 1, "null")
+ZEND_END_ARG_INFO()
+
+ZEND_FRAMELESS_FUNCTION(toy_tensor_add_flf, 2);
+ZEND_FRAMELESS_FUNCTION(toy_tensor_scale_flf, 2);
+ZEND_FRAMELESS_FUNCTION(toy_tensor_rmsnorm_flf, 3);
+
+static const zend_frameless_function_info frameless_function_infos_toy_tensor_add[] = {
+    { ZEND_FRAMELESS_FUNCTION_NAME(toy_tensor_add_flf, 2), 2 },
+    { 0 },
+};
+
+static const zend_frameless_function_info frameless_function_infos_toy_tensor_scale[] = {
+    { ZEND_FRAMELESS_FUNCTION_NAME(toy_tensor_scale_flf, 2), 2 },
+    { 0 },
+};
+
+static const zend_frameless_function_info frameless_function_infos_toy_tensor_rmsnorm[] = {
+    { ZEND_FRAMELESS_FUNCTION_NAME(toy_tensor_rmsnorm_flf, 3), 3 },
+    { 0 },
+};
+
+#define TOY_NS_FRAMELESS_FE(ns, name, handler, arg_info, infos) \
+    ZEND_RAW_FENTRY(ZEND_NS_NAME(ns, #name), handler, arg_info, 0, infos, NULL)
+
+const zend_function_entry toy_functions[] = {
     ZEND_NS_NAMED_FE("Toy\\Tensor", matmul_f32, zif_toy_tensor_matmul_f32,
                      arginfo_toy_tensor_matmul_f32)
     ZEND_NS_NAMED_FE("Toy\\Tensor", matvec_f32, zif_toy_tensor_matvec_f32,
                      arginfo_toy_tensor_matvec_f32)
-    ZEND_NS_NAMED_FE("Toy\\Tensor", add, zif_toy_tensor_add,
-                     arginfo_toy_tensor_add)
-    ZEND_NS_NAMED_FE("Toy\\Tensor", scale, zif_toy_tensor_scale,
-                     arginfo_toy_tensor_scale)
-    ZEND_NS_NAMED_FE("Toy\\Tensor", rmsnorm, zif_toy_tensor_rmsnorm,
-                     arginfo_toy_tensor_rmsnorm)
+    TOY_NS_FRAMELESS_FE("Toy\\Tensor", add, zif_toy_tensor_add,
+                        arginfo_toy_tensor_add, frameless_function_infos_toy_tensor_add)
+    TOY_NS_FRAMELESS_FE("Toy\\Tensor", scale, zif_toy_tensor_scale,
+                        arginfo_toy_tensor_scale, frameless_function_infos_toy_tensor_scale)
+    TOY_NS_FRAMELESS_FE("Toy\\Tensor", rmsnorm, zif_toy_tensor_rmsnorm,
+                        arginfo_toy_tensor_rmsnorm, frameless_function_infos_toy_tensor_rmsnorm)
+    ZEND_NS_NAMED_FE("Toy\\Tensor", kernel_stats, zif_toy_tensor_kernel_stats,
+                     arginfo_toy_tensor_kernel_stats)
+    ZEND_NS_NAMED_FE("Toy\\Tensor", kernel_enable, zif_toy_tensor_kernel_enable,
+                     arginfo_toy_tensor_kernel_enable)
+    ZEND_NS_NAMED_FE("Toy\\Tensor", kernel_isa, zif_toy_tensor_kernel_isa,
+                     arginfo_toy_tensor_kernel_isa)
     ZEND_FE_END
 };
 
@@ -58,6 +108,25 @@ const zend_function_entry tensor_functions[] = {
         zend_throw_error(NULL, "Toy\\Tensor object is not initialized");
     }
     return tensor;
+}
+
+[[nodiscard]] static bool php_toy_tensor_object(zval *value, toy_tensor **tensor,
+                                                uint32_t arg_num)
+{
+    if (UNEXPECTED(Z_TYPE_P(value) != IS_OBJECT)
+        || UNEXPECTED(!instanceof_function(Z_OBJCE_P(value), toy_tensor_ce))) {
+        zend_argument_type_error(arg_num, "must be of type Toy\\Tensor, %s given",
+                                 zend_zval_type_name(value));
+        return false;
+    }
+
+    toy_tensor *fetched = php_toy_tensor_fetch(value);
+    if (UNEXPECTED(fetched == NULL)) {
+        zend_throw_error(NULL, "Toy\\Tensor object is not initialized");
+        return false;
+    }
+    *tensor = fetched;
+    return true;
 }
 
 [[nodiscard]] static bool php_toy_tensor_require_f32(const toy_tensor *tensor,
@@ -129,10 +198,191 @@ const zend_function_entry tensor_functions[] = {
     return tensor;
 }
 
+static uint32_t php_toy_float_bits(float value)
+{
+    uint32_t bits;
+    memcpy(&bits, &value, sizeof(bits));
+    return bits;
+}
+
+static uint32_t php_toy_element_count(size_t numel)
+{
+    return numel <= UINT32_MAX ? (uint32_t) numel : 0;
+}
+
+static void php_toy_tensor_add_impl(toy_tensor *a, toy_tensor *b, zval *return_value)
+{
+    if (!php_toy_tensor_require_f32(a, 1) || !php_toy_tensor_require_f32(b, 2)) {
+        return;
+    }
+    if (a->rank != b->rank) {
+        zend_argument_value_error(2,
+            "must have the same number of dimensions as argument #1 ($a)");
+        return;
+    }
+    for (uint8_t i = 0; i < a->rank; i++) {
+        if (a->dims[i] != b->dims[i]) {
+            zend_argument_value_error(2, "must have the same shape as argument #1 ($a)");
+            return;
+        }
+    }
+
+    toy_tensor *result = php_toy_tensor_alloc_result(a->rank, a->dims);
+    if (!result) {
+        return;
+    }
+
+    size_t numel = toy_tensor_numel(a);
+    uint32_t count = php_toy_element_count(numel);
+    toy_kernel_entry kernel = count != 0
+        ? toy_kernel_for_element(a, TOY_KERNEL_ADD, 0, count)
+        : NULL;
+    if (kernel != NULL) {
+        kernel(toy_tensor_data(a), toy_tensor_data(b), toy_tensor_data(result));
+        toy_kernel_count_kernel_call();
+    } else {
+        toy_add_f32(toy_tensor_data(a), toy_tensor_data(b), toy_tensor_data(result), numel);
+        toy_kernel_count_scalar_call();
+    }
+
+    if (php_toy_tensor_wrap(return_value, result) != SUCCESS) {
+        return;
+    }
+}
+
+static void php_toy_tensor_scale_impl(toy_tensor *a, double factor, zval *return_value)
+{
+    if (!php_toy_tensor_require_f32(a, 1)) {
+        return;
+    }
+
+    toy_tensor *result = php_toy_tensor_alloc_result(a->rank, a->dims);
+    if (!result) {
+        return;
+    }
+
+    const float value = (float) factor;
+    size_t numel = toy_tensor_numel(a);
+    uint32_t count = php_toy_element_count(numel);
+    toy_kernel_entry kernel = count != 0
+        ? toy_kernel_for_element(a, TOY_KERNEL_SCALE, php_toy_float_bits(value), count)
+        : NULL;
+    if (kernel != NULL) {
+        kernel(toy_tensor_data(a), NULL, toy_tensor_data(result));
+        toy_kernel_count_kernel_call();
+    } else {
+        toy_scale_f32(toy_tensor_data(a), value, toy_tensor_data(result), numel);
+        toy_kernel_count_scalar_call();
+    }
+
+    if (php_toy_tensor_wrap(return_value, result) != SUCCESS) {
+        return;
+    }
+}
+
+static void php_toy_tensor_rmsnorm_impl(toy_tensor *x, toy_tensor *w, double eps,
+                                        zval *return_value)
+{
+    if (!php_toy_tensor_require_f32(x, 1) || !php_toy_tensor_require_f32(w, 2)) {
+        return;
+    }
+    if (x->rank != 1) {
+        zend_argument_value_error(1, "must be a 1-D tensor");
+        return;
+    }
+    if (!php_toy_tensor_expect_rank1(w, 2, x->dims[0])) {
+        return;
+    }
+
+    uint32_t n = x->dims[0];
+    uint32_t dims[TOY_TENSOR_MAX_DIMS] = { n, 0, 0, 0 };
+    toy_tensor *result = php_toy_tensor_alloc_result(1, dims);
+    if (!result) {
+        return;
+    }
+
+    const float eps32 = (float) eps;
+    toy_kernel_entry kernel = toy_kernel_for_element(x, TOY_KERNEL_RMSNORM,
+                                                     php_toy_float_bits(eps32), n);
+    if (kernel != NULL) {
+        kernel(toy_tensor_data(x), toy_tensor_data(w), toy_tensor_data(result));
+        toy_kernel_count_kernel_call();
+    } else {
+        toy_rmsnorm_f32(toy_tensor_data(x), toy_tensor_data(w), toy_tensor_data(result),
+                        n, eps32);
+        toy_kernel_count_scalar_call();
+    }
+
+    if (php_toy_tensor_wrap(return_value, result) != SUCCESS) {
+        return;
+    }
+}
+
+static void php_toy_tensor_matmul_impl(toy_tensor *a, toy_tensor *b, uint32_t m, uint32_t n,
+                                       uint32_t k, zval *return_value)
+{
+    if (!php_toy_tensor_require_f32(a, 1) || !php_toy_tensor_require_f32(b, 2)
+        || !php_toy_tensor_expect_rank2(a, 1, m, k)
+        || !php_toy_tensor_expect_rank2(b, 2, k, n)) {
+        return;
+    }
+
+    uint32_t dims[TOY_TENSOR_MAX_DIMS] = { m, n, 0, 0 };
+    toy_tensor *result = php_toy_tensor_alloc_result(2, dims);
+    if (!result) {
+        return;
+    }
+
+    toy_kernel_entry kernel = toy_kernel_for_shape(TOY_KERNEL_MATMUL, m, n, k);
+    if (kernel != NULL) {
+        kernel(toy_tensor_data(a), toy_tensor_data(b), toy_tensor_data(result));
+        toy_kernel_count_kernel_call();
+    } else {
+        toy_matmul_f32(toy_tensor_data(a), toy_tensor_data(b), toy_tensor_data(result),
+                       m, n, k);
+        toy_kernel_count_scalar_call();
+    }
+
+    if (php_toy_tensor_wrap(return_value, result) != SUCCESS) {
+        return;
+    }
+}
+
+static void php_toy_tensor_matvec_impl(toy_tensor *w, toy_tensor *x, uint32_t m, uint32_t k,
+                                       zval *return_value)
+{
+    if (!php_toy_tensor_require_f32(w, 1) || !php_toy_tensor_require_f32(x, 2)
+        || !php_toy_tensor_expect_rank2(w, 1, m, k)
+        || !php_toy_tensor_expect_rank1(x, 2, k)) {
+        return;
+    }
+
+    uint32_t dims[TOY_TENSOR_MAX_DIMS] = { m, 0, 0, 0 };
+    toy_tensor *result = php_toy_tensor_alloc_result(1, dims);
+    if (!result) {
+        return;
+    }
+
+    toy_kernel_entry kernel = toy_kernel_for_shape(TOY_KERNEL_MATVEC, m, 1, k);
+    if (kernel != NULL) {
+        kernel(toy_tensor_data(w), toy_tensor_data(x), toy_tensor_data(result));
+        toy_kernel_count_kernel_call();
+    } else {
+        toy_matvec_f32(toy_tensor_data(w), toy_tensor_data(x), toy_tensor_data(result), m, k);
+        toy_kernel_count_scalar_call();
+    }
+
+    if (php_toy_tensor_wrap(return_value, result) != SUCCESS) {
+        return;
+    }
+}
+
 PHP_FUNCTION(toy_tensor_matmul_f32)
 {
     zval *a_value, *b_value;
     zend_long m_arg, n_arg, k_arg;
+
+    toy_kernel_count_zif();
 
     ZEND_PARSE_PARAMETERS_START(5, 5)
         Z_PARAM_OBJECT_OF_CLASS(a_value, toy_tensor_ce)
@@ -154,20 +404,8 @@ PHP_FUNCTION(toy_tensor_matmul_f32)
         || !php_toy_tensor_dim(k_arg, &k, 5)) {
         RETURN_THROWS();
     }
-    if (!php_toy_tensor_require_f32(a, 1) || !php_toy_tensor_require_f32(b, 2)
-        || !php_toy_tensor_expect_rank2(a, 1, m, k)
-        || !php_toy_tensor_expect_rank2(b, 2, k, n)) {
-        RETURN_THROWS();
-    }
-
-    uint32_t dims[TOY_TENSOR_MAX_DIMS] = { m, n, 0, 0 };
-    toy_tensor *result = php_toy_tensor_alloc_result(2, dims);
-    if (!result) {
-        RETURN_THROWS();
-    }
-
-    toy_matmul_f32(toy_tensor_data(a), toy_tensor_data(b), toy_tensor_data(result), m, n, k);
-    if (php_toy_tensor_wrap(return_value, result) != SUCCESS) {
+    php_toy_tensor_matmul_impl(a, b, m, n, k, return_value);
+    if (UNEXPECTED(EG(exception))) {
         RETURN_THROWS();
     }
 }
@@ -176,6 +414,8 @@ PHP_FUNCTION(toy_tensor_matvec_f32)
 {
     zval *w_value, *x_value;
     zend_long m_arg, k_arg;
+
+    toy_kernel_count_zif();
 
     ZEND_PARSE_PARAMETERS_START(4, 4)
         Z_PARAM_OBJECT_OF_CLASS(w_value, toy_tensor_ce)
@@ -194,20 +434,8 @@ PHP_FUNCTION(toy_tensor_matvec_f32)
     if (!php_toy_tensor_dim(m_arg, &m, 3) || !php_toy_tensor_dim(k_arg, &k, 4)) {
         RETURN_THROWS();
     }
-    if (!php_toy_tensor_require_f32(w, 1) || !php_toy_tensor_require_f32(x, 2)
-        || !php_toy_tensor_expect_rank2(w, 1, m, k)
-        || !php_toy_tensor_expect_rank1(x, 2, k)) {
-        RETURN_THROWS();
-    }
-
-    uint32_t dims[TOY_TENSOR_MAX_DIMS] = { m, 0, 0, 0 };
-    toy_tensor *result = php_toy_tensor_alloc_result(1, dims);
-    if (!result) {
-        RETURN_THROWS();
-    }
-
-    toy_matvec_f32(toy_tensor_data(w), toy_tensor_data(x), toy_tensor_data(result), m, k);
-    if (php_toy_tensor_wrap(return_value, result) != SUCCESS) {
+    php_toy_tensor_matvec_impl(w, x, m, k, return_value);
+    if (UNEXPECTED(EG(exception))) {
         RETURN_THROWS();
     }
 }
@@ -215,6 +443,8 @@ PHP_FUNCTION(toy_tensor_matvec_f32)
 PHP_FUNCTION(toy_tensor_add)
 {
     zval *a_value, *b_value;
+
+    toy_kernel_count_zif();
 
     ZEND_PARSE_PARAMETERS_START(2, 2)
         Z_PARAM_OBJECT_OF_CLASS(a_value, toy_tensor_ce)
@@ -226,29 +456,8 @@ PHP_FUNCTION(toy_tensor_add)
     if (!a || !b) {
         RETURN_THROWS();
     }
-    if (!php_toy_tensor_require_f32(a, 1) || !php_toy_tensor_require_f32(b, 2)) {
-        RETURN_THROWS();
-    }
-    if (a->rank != b->rank) {
-        zend_argument_value_error(2,
-            "must have the same number of dimensions as argument #1 ($a)");
-        RETURN_THROWS();
-    }
-    for (uint8_t i = 0; i < a->rank; i++) {
-        if (a->dims[i] != b->dims[i]) {
-            zend_argument_value_error(2, "must have the same shape as argument #1 ($a)");
-            RETURN_THROWS();
-        }
-    }
-
-    toy_tensor *result = php_toy_tensor_alloc_result(a->rank, a->dims);
-    if (!result) {
-        RETURN_THROWS();
-    }
-
-    toy_add_f32(toy_tensor_data(a), toy_tensor_data(b), toy_tensor_data(result),
-                toy_tensor_numel(a));
-    if (php_toy_tensor_wrap(return_value, result) != SUCCESS) {
+    php_toy_tensor_add_impl(a, b, return_value);
+    if (UNEXPECTED(EG(exception))) {
         RETURN_THROWS();
     }
 }
@@ -257,6 +466,8 @@ PHP_FUNCTION(toy_tensor_scale)
 {
     zval *a_value;
     double factor;
+
+    toy_kernel_count_zif();
 
     ZEND_PARSE_PARAMETERS_START(2, 2)
         Z_PARAM_OBJECT_OF_CLASS(a_value, toy_tensor_ce)
@@ -267,18 +478,8 @@ PHP_FUNCTION(toy_tensor_scale)
     if (!a) {
         RETURN_THROWS();
     }
-    if (!php_toy_tensor_require_f32(a, 1)) {
-        RETURN_THROWS();
-    }
-
-    toy_tensor *result = php_toy_tensor_alloc_result(a->rank, a->dims);
-    if (!result) {
-        RETURN_THROWS();
-    }
-
-    toy_scale_f32(toy_tensor_data(a), (float) factor, toy_tensor_data(result),
-                  toy_tensor_numel(a));
-    if (php_toy_tensor_wrap(return_value, result) != SUCCESS) {
+    php_toy_tensor_scale_impl(a, factor, return_value);
+    if (UNEXPECTED(EG(exception))) {
         RETURN_THROWS();
     }
 }
@@ -287,6 +488,8 @@ PHP_FUNCTION(toy_tensor_rmsnorm)
 {
     zval *x_value, *w_value;
     double eps = toy_rmsnorm_default_eps;
+
+    toy_kernel_count_zif();
 
     ZEND_PARSE_PARAMETERS_START(2, 3)
         Z_PARAM_OBJECT_OF_CLASS(x_value, toy_tensor_ce)
@@ -300,27 +503,126 @@ PHP_FUNCTION(toy_tensor_rmsnorm)
     if (!x || !w) {
         RETURN_THROWS();
     }
-    if (!php_toy_tensor_require_f32(x, 1) || !php_toy_tensor_require_f32(w, 2)) {
+    php_toy_tensor_rmsnorm_impl(x, w, eps, return_value);
+    if (UNEXPECTED(EG(exception))) {
         RETURN_THROWS();
     }
-    if (x->rank != 1) {
-        zend_argument_value_error(1, "must be a 1-D tensor");
-        RETURN_THROWS();
+}
+
+ZEND_FRAMELESS_FUNCTION(toy_tensor_add_flf, 2)
+{
+    toy_kernel_count_flf();
+
+    toy_tensor *a, *b;
+    if (!php_toy_tensor_object(arg1, &a, 1) || !php_toy_tensor_object(arg2, &b, 2)) {
+        return;
     }
-    if (!php_toy_tensor_expect_rank1(w, 2, x->dims[0])) {
-        RETURN_THROWS();
+    php_toy_tensor_add_impl(a, b, return_value);
+}
+
+ZEND_FRAMELESS_FUNCTION(toy_tensor_scale_flf, 2)
+{
+    toy_kernel_count_flf();
+
+    toy_tensor *a;
+    if (!php_toy_tensor_object(arg1, &a, 1)) {
+        return;
     }
 
-    uint32_t n = x->dims[0];
-    uint32_t dims[TOY_TENSOR_MAX_DIMS] = { n, 0, 0, 0 };
-    toy_tensor *result = php_toy_tensor_alloc_result(1, dims);
-    if (!result) {
-        RETURN_THROWS();
+    double factor;
+    bool is_null = false;
+    if (!zend_parse_arg_double(arg2, &factor, &is_null, false, 2)) {
+        zend_wrong_parameter_type_error(2, Z_EXPECTED_DOUBLE, arg2);
+        return;
+    }
+    php_toy_tensor_scale_impl(a, factor, return_value);
+}
+
+ZEND_FRAMELESS_FUNCTION(toy_tensor_rmsnorm_flf, 3)
+{
+    toy_kernel_count_flf();
+
+    toy_tensor *x, *w;
+    if (!php_toy_tensor_object(arg1, &x, 1) || !php_toy_tensor_object(arg2, &w, 2)) {
+        return;
     }
 
-    toy_rmsnorm_f32(toy_tensor_data(x), toy_tensor_data(w), toy_tensor_data(result),
-                    n, (float) eps);
-    if (php_toy_tensor_wrap(return_value, result) != SUCCESS) {
-        RETURN_THROWS();
+    double eps;
+    bool is_null = false;
+    if (!zend_parse_arg_double(arg3, &eps, &is_null, false, 3)) {
+        zend_wrong_parameter_type_error(3, Z_EXPECTED_DOUBLE, arg3);
+        return;
     }
+    php_toy_tensor_rmsnorm_impl(x, w, eps, return_value);
+}
+
+PHP_FUNCTION(toy_tensor_kernel_stats)
+{
+    bool reset = false;
+
+    ZEND_PARSE_PARAMETERS_START(0, 1)
+        Z_PARAM_OPTIONAL
+        Z_PARAM_BOOL(reset)
+    ZEND_PARSE_PARAMETERS_END();
+
+    toy_kernel_stats stats;
+    toy_kernel_stats_read(&stats);
+
+    array_init(return_value);
+    add_assoc_bool(return_value, "enabled", stats.enabled);
+    add_assoc_bool(return_value, "avx2_available", stats.avx2_available);
+    add_assoc_string(return_value, "isa", (char *) stats.isa);
+    add_assoc_long(return_value, "flf_calls", (zend_long) stats.flf_calls);
+    add_assoc_long(return_value, "zif_calls", (zend_long) stats.zif_calls);
+    add_assoc_long(return_value, "memo_hits", (zend_long) stats.memo_hits);
+    add_assoc_long(return_value, "memo_misses", (zend_long) stats.memo_misses);
+    add_assoc_long(return_value, "arena_hits", (zend_long) stats.arena_hits);
+    add_assoc_long(return_value, "arena_misses", (zend_long) stats.arena_misses);
+    add_assoc_long(return_value, "generated", (zend_long) stats.generated);
+    add_assoc_long(return_value, "generation_failures", (zend_long) stats.generation_failures);
+    add_assoc_long(return_value, "kernel_calls", (zend_long) stats.kernel_calls);
+    add_assoc_long(return_value, "scalar_calls", (zend_long) stats.scalar_calls);
+
+    if (reset) {
+        toy_kernel_stats_reset();
+    }
+}
+
+PHP_FUNCTION(toy_tensor_kernel_enable)
+{
+    bool enable;
+
+    ZEND_PARSE_PARAMETERS_START(1, 1)
+        Z_PARAM_BOOL(enable)
+    ZEND_PARSE_PARAMETERS_END();
+
+    RETURN_BOOL(toy_kernel_set_enabled(enable));
+}
+
+PHP_FUNCTION(toy_tensor_kernel_isa)
+{
+    zend_string *name = NULL;
+
+    ZEND_PARSE_PARAMETERS_START(0, 1)
+        Z_PARAM_OPTIONAL
+        Z_PARAM_STR_OR_NULL(name)
+    ZEND_PARSE_PARAMETERS_END();
+
+    if (name != NULL) {
+        uint32_t isa;
+        if (zend_string_equals_literal(name, "scalar")) {
+            isa = TOY_ISA_SCALAR;
+        } else if (zend_string_equals_literal(name, "avx2")) {
+            isa = TOY_ISA_AVX2;
+        } else {
+            zend_argument_value_error(1, "must be \"scalar\" or \"avx2\"");
+            RETURN_THROWS();
+        }
+        if (!toy_kernel_set_isa(isa)) {
+            zend_argument_value_error(1, "is not supported by this host");
+            RETURN_THROWS();
+        }
+    }
+
+    RETURN_STRING(toy_isa_name(toy_kernel_isa()));
 }

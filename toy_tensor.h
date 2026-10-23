@@ -57,6 +57,20 @@ typedef struct toy_buffer {
     void *data;
 } toy_buffer;
 
+typedef void (*toy_kernel_entry)(const void *a, const void *b, void *c);
+
+/*
+ * Element-wise kernel memo
+ * The key packs kind and dtype with the element count. It stays valid across
+ * reshape, which preserves the element count, and a cast allocates a new
+ * tensor with an empty memo
+ */
+typedef struct toy_tensor_memo {
+    toy_kernel_entry kernel;
+    uint64_t key;
+    uint32_t param_bits;
+} toy_tensor_memo;
+
 typedef struct toy_tensor {
     uint32_t refcount;
     uint8_t dtype;
@@ -67,6 +81,7 @@ typedef struct toy_tensor {
     size_t bytes;
     void *data;
     toy_buffer *buffer;
+    toy_tensor_memo memo;
 } toy_tensor;
 
 /* Returns NULL for an unknown dtype */

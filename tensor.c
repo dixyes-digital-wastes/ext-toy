@@ -1,8 +1,13 @@
+#ifdef HAVE_CONFIG_H
+# include "config.h"
+#endif
+
 #include "php.h"
 #include "ext/standard/info.h"
 
 #include "php_ini.h"
-#include "php_tensor.h"
+#include "php_toy.h"
+#include "toy_kernel.h"
 #include "toy_kernel_arena.h"
 
 PHP_INI_BEGIN()
@@ -488,7 +493,7 @@ PHP_METHOD(Toy_Tensor, toBytes)
     RETURN_STRINGL((const char *) toy_tensor_data(tensor), tensor->bytes);
 }
 
-PHP_MINIT_FUNCTION(tensor)
+PHP_MINIT_FUNCTION(toy)
 {
     zend_class_entry ce;
 
@@ -528,21 +533,23 @@ PHP_MINIT_FUNCTION(tensor)
     php_toy_dtype_strings[TOY_DTYPE_I8] = zend_string_init_interned("i8", sizeof("i8") - 1, 1);
 
     toy_kernel_arena_startup();
+    toy_kernel_startup();
 
     return SUCCESS;
 }
 
-PHP_MSHUTDOWN_FUNCTION(tensor)
+PHP_MSHUTDOWN_FUNCTION(toy)
 {
+    toy_kernel_shutdown();
     toy_kernel_arena_shutdown();
     UNREGISTER_INI_ENTRIES();
 
     return SUCCESS;
 }
 
-PHP_RINIT_FUNCTION(tensor)
+PHP_RINIT_FUNCTION(toy)
 {
-#if defined(ZTS) && defined(COMPILE_DL_TENSOR)
+#if defined(ZTS) && defined(COMPILE_DL_TOY)
     ZEND_TSRMLS_CACHE_UPDATE();
 #endif
 
@@ -582,12 +589,20 @@ static void php_toy_info_kernel_arena(void)
              (unsigned long long) cache_stats.misses,
              (unsigned long long) cache_stats.insert_failures);
     php_info_print_table_row(2, "kernel spec cache stats", buffer);
+
+    toy_kernel_stats kernel;
+    toy_kernel_stats_read(&kernel);
+    snprintf(buffer, sizeof(buffer), "%s, avx2 %s, generated %llu",
+             kernel.enabled ? "enabled" : "disabled",
+             kernel.avx2_available ? "available" : "unavailable",
+             (unsigned long long) kernel.generated);
+    php_info_print_table_row(2, "kernels", buffer);
 }
 
-PHP_MINFO_FUNCTION(tensor)
+PHP_MINFO_FUNCTION(toy)
 {
     php_info_print_table_start();
-    php_info_print_table_row(2, "tensor support", "enabled");
+    php_info_print_table_row(2, "toy support", "enabled");
     php_info_print_table_row(2, "Tensor class", "Toy\\Tensor");
     php_info_print_table_row(2, "dtype", "f32");
     php_toy_info_kernel_arena();
@@ -595,22 +610,22 @@ PHP_MINFO_FUNCTION(tensor)
     DISPLAY_INI_ENTRIES();
 }
 
-zend_module_entry tensor_module_entry = {
+zend_module_entry toy_module_entry = {
     STANDARD_MODULE_HEADER,
-    "tensor",
-    tensor_functions,
-    PHP_MINIT(tensor),
-    PHP_MSHUTDOWN(tensor),
-    PHP_RINIT(tensor),
+    "toy",
+    toy_functions,
+    PHP_MINIT(toy),
+    PHP_MSHUTDOWN(toy),
+    PHP_RINIT(toy),
     NULL,
-    PHP_MINFO(tensor),
-    PHP_TENSOR_VERSION,
+    PHP_MINFO(toy),
+    PHP_TOY_VERSION,
     STANDARD_MODULE_PROPERTIES
 };
 
-#ifdef COMPILE_DL_TENSOR
+#ifdef COMPILE_DL_TOY
 # ifdef ZTS
 ZEND_TSRMLS_CACHE_DEFINE()
 # endif
-ZEND_GET_MODULE(tensor)
+ZEND_GET_MODULE(toy)
 #endif

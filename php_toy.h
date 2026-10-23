@@ -1,18 +1,18 @@
-#ifndef PHP_TENSOR_H
-#define PHP_TENSOR_H
+#ifndef PHP_TOY_H
+#define PHP_TOY_H
 
 #include "php.h"
 
 #include "toy_tensor.h"
 
-extern zend_module_entry tensor_module_entry;
-#define phpext_tensor_ptr &tensor_module_entry
+extern zend_module_entry toy_module_entry;
+#define phpext_toy_ptr &toy_module_entry
 
-#define PHP_TENSOR_VERSION "0.1.0"
+#define PHP_TOY_VERSION "0.1.0"
 
 extern zend_class_entry *toy_tensor_ce;
 
-extern const zend_function_entry tensor_functions[];
+extern const zend_function_entry toy_functions[];
 
 typedef struct php_toy_tensor {
     toy_tensor *tensor;
@@ -47,4 +47,9 @@ PHP_FUNCTION(toy_tensor_add);
 PHP_FUNCTION(toy_tensor_scale);
 PHP_FUNCTION(toy_tensor_rmsnorm);
 
-#endif /* PHP_TENSOR_H */
+/* Introspection for tests and measurements */
+PHP_FUNCTION(toy_tensor_kernel_stats);
+PHP_FUNCTION(toy_tensor_kernel_enable);
+PHP_FUNCTION(toy_tensor_kernel_isa);
+
+#endif /* PHP_TOY_H */
