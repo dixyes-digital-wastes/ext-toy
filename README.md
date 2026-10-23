@@ -48,8 +48,9 @@ $scaled = Toy\Tensor\scale($sum, 3.0);
 $out = Toy\Tensor::zeros('f32', [4]);
 Toy\Tensor\add($a, $b, $out);
 
-// q8_0 storage is optional
-$q = $a->cast('q8_0');
+// q8_0 storage is optional. The last dimension must be a multiple of 32
+$c = Toy\Tensor::full('f32', [32], 1.0);
+$q = $c->cast('q8_0');
 $back = $q->cast('f32');
 ```
 

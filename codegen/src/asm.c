@@ -51,7 +51,9 @@ static void emit_modrm_mem(struct toy_asm *as, uint8_t reg, const struct toy_mem
         return;
     }
 
+    // rsp and r12 cannot be the rm operand directly, they need a SIB byte
     bool need_sib = mem->has_index || (mem->base & 7) == 4;
+    // mod=00 with rbp or r13 means RIP-relative, so encode a zero displacement too
     bool zero_disp_ok = (mem->base & 7) != 5;
     uint8_t mod;
     if (mem->disp == 0 && zero_disp_ok) {
@@ -107,6 +109,9 @@ static void emit_gpr_imm(struct toy_asm *as, uint8_t ext, uint8_t rm, int32_t im
     }
 }
 
+// VEX prefix and opcode, then ModRM and an optional SIB byte and displacement
+// vvvv is the real register number, the encoding inverts it. Reserved bits take 0,
+// so the encoded bits read 1111
 static void emit_vex(struct toy_asm *as, uint8_t mmmmm, uint8_t pp, bool l, bool w, uint8_t vvvv,
                      uint8_t reg, bool has_mem, const struct toy_mem *mem, uint8_t rm, uint8_t opcode) {
     uint8_t r = (uint8_t)((reg >> 3) & 1);
@@ -333,6 +338,7 @@ void toy_asm_vxorps(struct toy_asm *as, bool wide, uint8_t dst, uint8_t src2, ui
     emit_vex(as, 1, 0, wide, false, src2, dst, false, NULL, src3, 0x57);
 }
 
+// The destination can be m128, so the destination goes in rm and the source ymm in reg
 void toy_asm_vpmovsxbd(struct toy_asm *as, bool wide, uint8_t dst, struct toy_mem mem) {
     emit_vex(as, 2, 1, wide, false, 0, dst, true, &mem, 0, 0x21);
 }
@@ -372,6 +378,7 @@ void toy_asm_vdivps(struct toy_asm *as, bool wide, uint8_t dst, uint8_t src2, ui
     emit_vex(as, 1, 0, wide, false, src2, dst, false, NULL, src3, 0x5E);
 }
 
+// vsqrtps has no second source register, so VEX.vvvv stays 1111
 void toy_asm_vsqrtps(struct toy_asm *as, bool wide, uint8_t dst, uint8_t src) {
     emit_vex(as, 1, 0, wide, false, 0, dst, false, NULL, src, 0x51);
 }

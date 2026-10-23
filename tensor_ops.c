@@ -91,6 +91,10 @@ ZEND_FRAMELESS_FUNCTION(toy_tensor_add_flf, 3);
 ZEND_FRAMELESS_FUNCTION(toy_tensor_scale_flf, 3);
 ZEND_FRAMELESS_FUNCTION(toy_tensor_rmsnorm_flf, 3);
 
+/*
+ * add and scale take an optional out, so a two-argument call uses the
+ * three-argument handler with NULL as the third argument
+ */
 static const zend_frameless_function_info frameless_function_infos_toy_tensor_add[] = {
     { ZEND_FRAMELESS_FUNCTION_NAME(toy_tensor_add_flf, 3), 3 },
     { 0 },
@@ -101,11 +105,16 @@ static const zend_frameless_function_info frameless_function_infos_toy_tensor_sc
     { 0 },
 };
 
+/*
+ * rmsnorm has a default eps, so one three-argument handler serves the
+ * two-argument and the three-argument call
+ */
 static const zend_frameless_function_info frameless_function_infos_toy_tensor_rmsnorm[] = {
     { ZEND_FRAMELESS_FUNCTION_NAME(toy_tensor_rmsnorm_flf, 3), 3 },
     { 0 },
 };
 
+/* ZEND_FRAMELESS_FE has no namespace variant, so reuse the entry layout */
 #define TOY_NS_FRAMELESS_FE(ns, name, handler, arg_info, infos) \
     ZEND_RAW_FENTRY(ZEND_NS_NAME(ns, #name), handler, arg_info, 0, infos, NULL)
 
@@ -145,6 +154,7 @@ const zend_function_entry toy_functions[] = {
     return tensor;
 }
 
+/* A frameless handler does not use ZPP, so check the types here */
 [[nodiscard]] static bool php_toy_tensor_object(zval *value, toy_tensor **tensor,
                                                 uint32_t arg_num)
 {
@@ -250,6 +260,7 @@ static uint32_t php_toy_float_bits(float value)
     return bits;
 }
 
+/* An element count above 32 bits gets no kernel, the scalar path still works */
 static uint32_t php_toy_element_count(size_t numel)
 {
     return numel <= UINT32_MAX ? (uint32_t) numel : 0;
@@ -297,6 +308,7 @@ static uint32_t php_toy_element_count(size_t numel)
     return true;
 }
 
+/* Same data range, to tell if out is one of the inputs */
 [[nodiscard]] static bool php_toy_tensor_same_range(const toy_tensor *a, const toy_tensor *b)
 {
     return a->bytes == b->bytes
@@ -312,6 +324,10 @@ static uint32_t php_toy_element_count(size_t numel)
     return a_begin < b_begin + b->bytes && b_begin < a_begin + a->bytes;
 }
 
+/*
+ * add and scale accept an out that matches one input exactly. A partial
+ * overlap breaks the elementwise read and write
+ */
 [[nodiscard]] static bool php_toy_tensor_out_alias_check(const toy_tensor *out,
                                                          const toy_tensor *a,
                                                          const toy_tensor *b,
@@ -344,6 +360,7 @@ static uint32_t php_toy_element_count(size_t numel)
     return true;
 }
 
+/* rmsnorm_into accepts an out that matches x exactly, but not one that touches w */
 [[nodiscard]] static bool php_toy_tensor_out_rmsnorm_check(const toy_tensor *out,
                                                            const toy_tensor *x,
                                                            const toy_tensor *w,

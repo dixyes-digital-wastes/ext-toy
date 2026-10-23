@@ -1,3 +1,16 @@
+/*
+ * Standalone benchmark for the kernel arena
+ * This file does not link against PHP and runs on POSIX only
+ *
+ * Every operation allocates a random block of 1, 2, 4 or 8 pages and frees it
+ * at once. The seal variant also writes one byte and seals the block.
+ *
+ * Build and run:
+ *   cc -std=gnu23 -Wall -Wextra -Werror -O2 -pthread -I. \
+ *      tests/c/toy_arena_bench.c toy_arena.c \
+ *      -o /tmp/toy_arena_bench
+ *   /tmp/toy_arena_bench [repeats]
+ */
 
 #include <pthread.h>
 #include <stdint.h>

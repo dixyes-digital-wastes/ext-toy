@@ -77,6 +77,7 @@ void toy_ref_matvec(uint32_t m, uint32_t k, const float *w, const float *x, floa
     }
 }
 
+// 8 rows x 1 column, 8 independent accumulators
 static void toy_ref_block_8x1(uint32_t k, const float *b, uint32_t j, uint32_t n,
                               const float *a0, const float *a1, const float *a2, const float *a3,
                               const float *a4, const float *a5, const float *a6, const float *a7,
@@ -137,6 +138,7 @@ void toy_ref_gemm(uint32_t m, uint32_t n, uint32_t k, const float *a, const floa
             float s70 = 0.0f, s71 = 0.0f, s72 = 0.0f, s73 = 0.0f;
             const float *bp = b + j0;
             for (uint32_t p = 0; p < k; p++) {
+                // The strided walk over B reaches a new cache line each step, prefetch to cover the memory latency
 #if defined(__GNUC__) || defined(__clang__)
                 __builtin_prefetch(bp + 32 * n, 0, 1);
 #endif
@@ -244,6 +246,7 @@ void toy_ref_gemm(uint32_t m, uint32_t n, uint32_t k, const float *a, const floa
 
 /* ---------- q8_0 ---------- */
 
+// stride is the step of x along k, 1 for dot and matvec, n for matmul
 static float toy_ref_q8_0_row(const struct toy_q8_0_block *w, uint32_t blocks,
                              const float *x, uint32_t stride) {
     float acc = 0.0f;

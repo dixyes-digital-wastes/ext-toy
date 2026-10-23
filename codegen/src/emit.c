@@ -7,6 +7,12 @@
 #include "toy/asm.h"
 #include "toy/q8_0.h"
 
+/*
+ * The Windows x64 ABI differs from SysV: integer arguments arrive in rcx, rdx
+ * and r8, and rdi, rsi and xmm6 to xmm15 are callee-saved. The generator keeps
+ * the SysV register plan, so on this target a prologue moves the arguments and
+ * saves those registers, and an epilogue restores them
+ */
 #if defined(_WIN32) && (defined(_M_X64) || defined(__x86_64__))
 # define TOY_WIN64_ABI 1
 #endif
@@ -42,14 +48,17 @@ static void emit_win64_epilogue(struct toy_asm *as) {
 }
 #endif
 
+// A kernel uses at most 9 labels
 enum {
     LABEL_I = 0,
     LABEL_J = 1,
     LABEL_P = 2,
+    // The matvec main loop has a row label and a k label only, the tail starts at 2
     MATVEC_P = 1,
     MATVEC_TAIL_I = 2,
     MATVEC_TAIL_J = 3,
     MATVEC_TAIL_P = 4,
+    // dot has one k loop
     DOT_P = 0,
 };
 
@@ -62,6 +71,13 @@ static void emit_reduce_ymm_to_xmm(struct toy_asm *as, uint8_t ymm) {
     toy_asm_vaddps(as, false, ymm, ymm, TOY_XMM9);
 }
 
+/*
+ * Scalar block of 8 rows: one k loop per column, xmm0-7 hold the accumulators
+ * of the 8 rows
+ *
+ * The order inside a row is the same as the elementwise code, but 8 separate
+ * FMA chains hide the latency
+ */
 static void emit_scalar_block8(struct toy_asm *as, uint32_t blocks, uint32_t cols, uint32_t k,
                                uint32_t bStride, uint32_t cStride,
                                uint8_t labelI, uint8_t labelJ, uint8_t labelP) {
@@ -114,6 +130,15 @@ static void emit_scalar_block8(struct toy_asm *as, uint32_t blocks, uint32_t col
     }
 }
 
+/*
+ * Scalar region: sequential accumulation, each output sums over k in
+ * increasing order
+ *
+ * The input is three pointers, the output goes to
+ * C + (startRow + i) * cStride + startCol + j
+ * bStride is the row stride of B along k, cStride is the row stride of C
+ * All counts are generation-time constants, the loop bounds are immediates
+ */
 static void emit_scalar_region(struct toy_asm *as, uint32_t rows, uint32_t cols, uint32_t k,
                                uint32_t startRow, uint32_t startCol,
                                uint32_t bStride, uint32_t cStride,
@@ -124,6 +149,7 @@ static void emit_scalar_region(struct toy_asm *as, uint32_t rows, uint32_t cols,
     const int32_t aRowBytes = (int32_t)(k * 4);
     const int32_t cRowBytes = (int32_t)(cStride * 4);
     const int32_t bStep = (int32_t)(bStride * 4);
+    // When the j loop ends r10 points at startCol + cols, so step to the same column of the next row
     const int32_t cStep = (int32_t)((cStride - cols) * 4);
 
     // r8 = a + startRow * k
@@ -171,6 +197,16 @@ static void emit_scalar_region(struct toy_asm *as, uint32_t rows, uint32_t cols,
     }
 }
 
+/*
+ * AVX2 GEMM: 8 rows x 4 columns x depth 4
+ *
+ * ymm0-7 hold the accumulators of the 8 rows, each uses the low 4 lanes only
+ * ymm8-11 hold 4 column vectors of B, ymm12 broadcasts one element of A
+ * Each output accumulates over k in increasing order, so it matches the scalar
+ * reference bit for bit
+ * The row tail and the column tail are known shapes, the scalar region handles
+ * them
+ */
 static void emit_avx2_gemm(struct toy_asm *as, uint32_t m, uint32_t n, uint32_t k) {
     const uint32_t n4 = n & ~3u;
     const uint32_t m8 = m & ~7u;
@@ -180,6 +216,8 @@ static void emit_avx2_gemm(struct toy_asm *as, uint32_t m, uint32_t n, uint32_t 
         const uint32_t kt = k & 3u;
         const uint32_t blocks = m8 / 8;
 
+        // i is the outer loop: the A panel of 8 rows (8 x k) stays in L2 and serves all j blocks
+        // j is the inner loop, B streams through in column blocks
         toy_asm_mov_rr(as, TOY_R8, TOY_RDI);
         toy_asm_mov_rr(as, TOY_R9, TOY_RDX);
         toy_asm_xor_rr(as, TOY_R11, TOY_R11);
@@ -189,6 +227,7 @@ static void emit_avx2_gemm(struct toy_asm *as, uint32_t m, uint32_t n, uint32_t 
         for (uint8_t r = 0; r < 8; r++) {
             toy_asm_vxorps(as, true, r, r, r);
         }
+        // r10 = j + p * n, in elements
         toy_asm_mov_rr(as, TOY_R10, TOY_RCX);
         toy_asm_xor_rr(as, TOY_RAX, TOY_RAX);
         if (k4 != 0) {
@@ -197,6 +236,7 @@ static void emit_avx2_gemm(struct toy_asm *as, uint32_t m, uint32_t n, uint32_t 
                 toy_asm_vmovups_load_xmm(as, (uint8_t)(TOY_XMM8 + q),
                                          toy_mem_index(TOY_RSI, TOY_R10, 4, (int32_t)(q * n * 4)));
             }
+            // q is the outer loop, so 7 independent instructions separate two FMAs on one accumulator
             for (uint8_t q = 0; q < 4; q++) {
                 for (uint8_t r = 0; r < 8; r++) {
                     toy_asm_vbroadcastss(as, TOY_YMM12,
@@ -235,10 +275,17 @@ static void emit_avx2_gemm(struct toy_asm *as, uint32_t m, uint32_t n, uint32_t 
         }
     }
 
+    // Column tail: the part of the first m8 rows where j >= n4
     emit_scalar_region(as, m8, n - n4, k, 0, n4, n, n, 3, 4, 5);
+    // Row tail: rows where every j falls after m8
     emit_scalar_region(as, m - m8, n, k, m8, 0, n, n, 6, 7, 8);
 }
 
+/*
+ * AVX2 matvec: 8 rows per group, one ymm accumulator per row, 8 steps along k
+ * A lane holds a subsequence of k with step 8, a horizontal sum at the end
+ * handles the k tail
+ */
 static void emit_avx2_matvec(struct toy_asm *as, uint32_t m, uint32_t k) {
     const uint32_t m8 = m & ~7u;
     const uint32_t k8 = k & ~7u;
@@ -286,6 +333,7 @@ static void emit_avx2_matvec(struct toy_asm *as, uint32_t m, uint32_t k) {
     emit_scalar_region(as, m - m8, 1, k, m8, 0, 1, 1, MATVEC_TAIL_I, MATVEC_TAIL_J, MATVEC_TAIL_P);
 }
 
+// AVX2 dot: one ymm accumulator, 8 steps along k, horizontal sum at the end
 static void emit_avx2_dot(struct toy_asm *as, uint32_t k) {
     const uint32_t k8 = k & ~7u;
     const uint32_t kt = k & 7u;
@@ -309,6 +357,7 @@ static void emit_avx2_dot(struct toy_asm *as, uint32_t k) {
     toy_asm_vmovss_store(as, toy_mem_base(TOY_RDX, 0), TOY_XMM0);
 }
 
+// Writes a generation-time constant into the low lane of xmm
 static void emit_const_xmm(struct toy_asm *as, uint8_t xmm, uint32_t bits) {
     toy_asm_mov_imm32(as, TOY_RAX, bits);
     toy_asm_vmovd_gpr(as, xmm, TOY_RAX);
@@ -320,6 +369,13 @@ static uint32_t float_bits(float value) {
     return bits;
 }
 
+/*
+ * ADD:   c[i] = a[i] + b[i]
+ * SCALE: c[i] = a[i] * param
+ *
+ * wide selects 8 lanes of AVX2, otherwise the code works on one element. The
+ * tail count is a generation-time constant
+ */
 static void emit_element_binary(struct toy_asm *as, uint32_t op, uint32_t count, bool wide,
                                 uint32_t param_bits) {
     if (count == 0) {
@@ -330,6 +386,7 @@ static void emit_element_binary(struct toy_asm *as, uint32_t op, uint32_t count,
     const bool scale = op == TOY_OP_SCALE;
 
     if (scale) {
+        // Broadcast the factor into xmm7 or ymm7
         emit_const_xmm(as, TOY_XMM7, param_bits);
         if (wide) {
             toy_asm_vshufps(as, TOY_XMM7, TOY_XMM7, TOY_XMM7, 0x00);
@@ -385,6 +442,13 @@ static void emit_element_binary(struct toy_asm *as, uint32_t op, uint32_t count,
     }
 }
 
+/*
+ * RMSNORM: out[i] = (x[i] * scale) * w[i], scale = 1 / sqrt(sum(x^2) / n + eps)
+ *
+ * The sum of squares is one chain in element order, so it matches the scalar
+ * reference bit for bit
+ * wide applies to the output loop only
+ */
 static void emit_rmsnorm(struct toy_asm *as, uint32_t n, bool wide, uint32_t eps_bits) {
     if (n == 0) {
         return;
@@ -448,12 +512,20 @@ static void emit_rmsnorm(struct toy_asm *as, uint32_t n, bool wide, uint32_t eps
     }
 }
 
+
 /* ---------- q8_0 ---------- */
 
 static bool op_is_q8_0(uint32_t op) {
     return op >= TOY_OP_Q8_0_DOT && op <= TOY_OP_Q8_0_MATMUL;
 }
 
+/*
+ * q8_0 scalar region: one element at a time
+ *
+ * A weight row holds blocks 34-byte blocks. Each block runs 32 scalar FMAs into
+ * sum, then the f16 scale folds into the output. The caller splits the row tail
+ * and the column tail with generation-time constants
+ */
 static void emit_q8_scalar(struct toy_asm *as, uint32_t rows, uint32_t cols, uint32_t n,
                            uint32_t k, uint32_t startCol,
                            uint8_t labelRow, uint8_t labelCol, uint8_t labelBlock) {
@@ -514,9 +586,16 @@ static void emit_q8_scalar(struct toy_asm *as, uint32_t rows, uint32_t cols, uin
         toy_asm_cmp_imm(as, TOY_RCX, (int32_t)rows);
         toy_asm_jcc(as, TOY_CC_NE, labelRow);
     }
+    // Restore rdi to the base of w for the later regions of the same kernel
     toy_asm_sub_imm(as, TOY_RDI, rowTotal);
 }
 
+/*
+ * AVX2 kernel for q8_0 dot and matvec: four ymm accumulators per row, each
+ * block covers 4 groups of 8 elements
+ * A horizontal sum closes the block, then the f16 scale folds into the scalar
+ * output
+ */
 static void emit_q8_avx2_dotmatvec(struct toy_asm *as, uint32_t rows, uint32_t k) {
     const uint32_t blocks = k / TOY_Q8_0_BLOCK;
     const int32_t rowBytes = (int32_t)(blocks * TOY_Q8_0_BLOCK_BYTES);
@@ -566,6 +645,13 @@ static void emit_q8_avx2_dotmatvec(struct toy_asm *as, uint32_t rows, uint32_t k
     toy_asm_sub_imm(as, TOY_RDI, rowTotal);
 }
 
+/*
+ * Main body for one row of 16 columns: 32 p values unrolled, two ymm registers
+ * carry the columns
+ *
+ * On entry rdi is the weight base of the current row, rdx is the output address
+ * of the current row, rsi is the base of x, r10 is the column offset
+ */
 static void emit_q8_matmul_body(struct toy_asm *as, uint32_t n, uint32_t blocks,
                                 int32_t xBlockStep, uint8_t labelBlock) {
     toy_asm_vxorps(as, true, TOY_YMM0, TOY_YMM0, TOY_YMM0);
@@ -620,6 +706,12 @@ static void emit_q8_avx2_matmul(struct toy_asm *as, uint32_t m, uint32_t n, uint
     const uint32_t tileTail = m - tileMain;
 
     if (n16 != 0) {
+        /*
+         * The column block is the outer loop, so all output rows reuse the k x 16
+         * slice of x. The rows then split into tiles of tileRows, so the weights and
+         * the x slice of one tile stay in L2 and the weight stream does not push x
+         * out of the cache
+         */
         toy_asm_xor_rr(as, TOY_R10, TOY_R10);
         toy_asm_label(as, 1);
         toy_asm_xor_rr(as, TOY_R9, TOY_R9);
@@ -692,6 +784,7 @@ static bool spec_valid(const struct toy_spec *spec) {
     }
 
     if (spec->op >= TOY_OP_ADD) {
+        // Elementwise: m is the element count, the index increments as a 32-bit integer
         if (spec->n != 1 || spec->k != 1) {
             return false;
         }
@@ -704,6 +797,7 @@ static bool spec_valid(const struct toy_spec *spec) {
     if (spec->m > 65535 || spec->n > 65535 || spec->k > 65535) {
         return false;
     }
+    // Displacements and pointer increments are int32, so they cannot overflow
     const uint64_t m = spec->m, n = spec->n, k = spec->k;
 
     if (spec->op == TOY_OP_MATVEC && spec->n != 1) {

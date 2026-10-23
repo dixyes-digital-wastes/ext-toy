@@ -1,5 +1,16 @@
 #include "toy/codegen.h"
 
+/*
+ * CPU feature detection
+ *
+ * The standalone generator keeps this code in exec.c, together with its mmap
+ * executable memory. This snapshot only needs the check, so the code lives in
+ * its own file
+ *
+ * Both generated ISAs use FMA instructions, so scalar also needs FMA
+ * The q8_0 kernels use vcvtph2ps, so they also need F16C
+ */
+
 #if defined(__x86_64__) || defined(__i386__) || defined(_M_X64) || defined(_M_IX86)
 # define TOY_ISA_ARCH_X86 1
 #endif
@@ -16,6 +27,11 @@ static bool toy_isa_avx2;
 static bool toy_isa_f16c;
 
 #if defined(TOY_ISA_MSVC_X64)
+/*
+ * MSVC has no __builtin_cpu_supports, so read CPUID and XCR0 directly
+ * FMA and F16C are VEX-encoded instructions, so the OS must save the YMM state
+ * before they are available
+ */
 static void toy_isa_init_msvc(void) {
     int regs[4] = { 0, 0, 0, 0 };
     __cpuid(regs, 0);

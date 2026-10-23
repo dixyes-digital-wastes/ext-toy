@@ -3,6 +3,11 @@
 #include <math.h>
 #include <string.h>
 
+/*
+ * Portable f16 to f32 conversion, independent of the F16C instructions and
+ * _Float16
+ * The rounding is round-to-nearest-even, the same as the hardware conversion
+ */
 float toy_f16_to_f32(uint16_t h) {
     const uint32_t sign = (uint32_t)(h & 0x8000u) << 16;
     uint32_t exp = (uint32_t)(h >> 10) & 0x1Fu;

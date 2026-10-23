@@ -5,6 +5,14 @@
 #include <stddef.h>
 #include <stdint.h>
 
+/*
+ * x86-64 instruction encoder
+ *
+ * Covers only the instructions that the generator needs. All branches use
+ * rel32, so one fixup pass corrects them. A memory operand supports
+ * base + index * scale + disp32, but not RIP-relative or absolute addresses
+ */
+
 enum {
     TOY_RAX = 0,
     TOY_RCX = 1,
@@ -43,6 +51,7 @@ enum {
     TOY_XMM15 = 15,
 };
 
+// Shares the XMM numbers, only to tell the operand width apart
 enum {
     TOY_YMM0 = 0,
     TOY_YMM1 = 1,
@@ -178,7 +187,9 @@ void toy_asm_vextractf128(struct toy_asm *as, uint8_t dst, uint8_t src, uint8_t 
 void toy_asm_vshufps(struct toy_asm *as, uint8_t dst, uint8_t src2, uint8_t src3, uint8_t imm);
 
 void toy_asm_vdivps(struct toy_asm *as, bool wide, uint8_t dst, uint8_t src2, uint8_t src3);
+// vsqrtps has no second source register
 void toy_asm_vsqrtps(struct toy_asm *as, bool wide, uint8_t dst, uint8_t src);
+// Moves a 32-bit integer into the low xmm lane, for a constant known at generation time
 void toy_asm_vmovd_gpr(struct toy_asm *as, uint8_t dst, uint8_t gpr);
 void toy_asm_vinsertf128(struct toy_asm *as, uint8_t dst, uint8_t src1, uint8_t src2, uint8_t imm);
 

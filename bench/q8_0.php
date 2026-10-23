@@ -1,6 +1,13 @@
 <?php
 declare(strict_types=1);
 
+/*
+ * Measures the accuracy and the speed of q8_0
+ *
+ * Usage:
+ *   php -n -d extension=$PWD/modules/toy.so bench/q8_0.php
+ */
+
 require __DIR__ . '/../tests/helpers/q8.php';
 
 ini_set('memory_limit', '512M');
@@ -37,6 +44,8 @@ function make_vector(int $count, int $seed): Toy\Tensor {
 }
 
 printf("PHP %s, %s\n", PHP_VERSION, Toy\Tensor\kernel_stats()['isa']);
+
+/* ---------- accuracy ---------- */
 
 echo "\naccuracy (double reference over dequantized weights)\n";
 printf("%6s %10s %10s %10s\n", 'k', 'maxAbs', 'maxScaled', 'NMSE');
