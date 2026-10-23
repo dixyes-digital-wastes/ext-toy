@@ -4,8 +4,8 @@
  */
 
 #include "toy_spec_cache.h"
+#include "toy_platform.h"
 
-#include <pthread.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -23,7 +23,7 @@ struct toy_spec_cache {
     size_t capacity;
     size_t mask;
     size_t used;
-    pthread_mutex_t lock;
+    toy_platform_lock lock;
     toy_spec_cache_stats stats;
 };
 
@@ -114,7 +114,7 @@ toy_spec_cache *toy_spec_cache_create(toy_arena *arena, size_t capacity)
         return NULL;
     }
     cache->entries = calloc(rounded, sizeof(toy_spec_entry));
-    if (cache->entries == NULL || pthread_mutex_init(&cache->lock, NULL) != 0) {
+    if (cache->entries == NULL || !toy_platform_lock_init(&cache->lock)) {
         free(cache->entries);
         free(cache);
         return NULL;
@@ -132,7 +132,7 @@ void toy_spec_cache_destroy(toy_spec_cache *cache)
     if (cache == NULL) {
         return;
     }
-    pthread_mutex_destroy(&cache->lock);
+    toy_platform_lock_destroy(&cache->lock);
     free(cache->entries);
     free(cache);
 }
@@ -148,17 +148,17 @@ bool toy_spec_cache_get_or_create(toy_spec_cache *cache,
     uint64_t hash = toy_spec_cache_hash_key(key);
     size_t slot = 0;
 
-    pthread_mutex_lock(&cache->lock);
+    toy_platform_lock_acquire(&cache->lock);
     bool found = toy_spec_cache_find_locked(cache, key, hash, &slot);
     cache->stats.lookups++;
     if (found) {
         cache->stats.hits++;
         *block = toy_spec_cache_entry_block(&cache->entries[slot]);
-        pthread_mutex_unlock(&cache->lock);
+        toy_platform_lock_release(&cache->lock);
         return true;
     }
     cache->stats.misses++;
-    pthread_mutex_unlock(&cache->lock);
+    toy_platform_lock_release(&cache->lock);
 
     toy_arena_block created = { 0 };
     if (!toy_arena_alloc_bytes(cache->arena, bytes_hint, &created)) {
@@ -166,9 +166,9 @@ bool toy_spec_cache_get_or_create(toy_spec_cache *cache,
     }
     size_t capacity_bytes = (size_t) created.pages * toy_arena_page_size(cache->arena);
     if (!fill(key, context, created.code, capacity_bytes)) {
-        pthread_mutex_lock(&cache->lock);
+        toy_platform_lock_acquire(&cache->lock);
         cache->stats.fill_failures++;
-        pthread_mutex_unlock(&cache->lock);
+        toy_platform_lock_release(&cache->lock);
         toy_arena_free(cache->arena, &created);
         return false;
     }
@@ -178,18 +178,18 @@ bool toy_spec_cache_get_or_create(toy_spec_cache *cache,
     }
 
     /* Another thread can insert the same key while the fill callback runs. */
-    pthread_mutex_lock(&cache->lock);
+    toy_platform_lock_acquire(&cache->lock);
     found = toy_spec_cache_find_locked(cache, key, hash, &slot);
     if (found) {
         cache->stats.hits++;
         *block = toy_spec_cache_entry_block(&cache->entries[slot]);
-        pthread_mutex_unlock(&cache->lock);
+        toy_platform_lock_release(&cache->lock);
         toy_arena_free(cache->arena, &created);
         return true;
     }
     if (cache->used == cache->capacity || slot == SIZE_MAX) {
         cache->stats.insert_failures++;
-        pthread_mutex_unlock(&cache->lock);
+        toy_platform_lock_release(&cache->lock);
         toy_arena_free(cache->arena, &created);
         return false;
     }
@@ -202,7 +202,7 @@ bool toy_spec_cache_get_or_create(toy_spec_cache *cache,
     cache->used++;
     cache->stats.inserts++;
     *block = created;
-    pthread_mutex_unlock(&cache->lock);
+    toy_platform_lock_release(&cache->lock);
     return true;
 }
 
@@ -225,7 +225,7 @@ bool toy_spec_cache_lookup(toy_spec_cache *cache, const uint8_t key[TOY_SPEC_KEY
     }
     uint64_t hash = toy_spec_cache_hash_key(key);
     size_t slot = 0;
-    pthread_mutex_lock(&cache->lock);
+    toy_platform_lock_acquire(&cache->lock);
     bool found = toy_spec_cache_find_locked(cache, key, hash, &slot);
     cache->stats.lookups++;
     if (found) {
@@ -234,7 +234,7 @@ bool toy_spec_cache_lookup(toy_spec_cache *cache, const uint8_t key[TOY_SPEC_KEY
     } else {
         cache->stats.misses++;
     }
-    pthread_mutex_unlock(&cache->lock);
+    toy_platform_lock_release(&cache->lock);
     return found;
 }
 
@@ -243,10 +243,10 @@ void toy_spec_cache_get_stats(toy_spec_cache *cache, toy_spec_cache_stats *stats
     if (cache == NULL || stats == NULL) {
         return;
     }
-    pthread_mutex_lock(&cache->lock);
+    toy_platform_lock_acquire(&cache->lock);
     *stats = cache->stats;
     stats->used = cache->used;
     stats->capacity = cache->capacity;
     stats->table_bytes = cache->capacity * sizeof(toy_spec_entry);
-    pthread_mutex_unlock(&cache->lock);
+    toy_platform_lock_release(&cache->lock);
 }

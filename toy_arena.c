@@ -3,27 +3,22 @@
  *
  * One anonymous mapping holds all code pages. Pages move between RW and RX
  * and never become writable and executable at the same time. Blocks come in
- * sizes of 1, 2, 4 and 8 pages, so one mprotect call seals one block.
+ * sizes of 1, 2, 4 and 8 pages, so one protection change seals one block.
  */
 
 #include "toy_arena.h"
+#include "toy_platform.h"
 
 #include <assert.h>
-#include <pthread.h>
 #include <stdalign.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/mman.h>
-#include <unistd.h>
 
 enum {
     TOY_ARENA_DEFAULT_BYTES = 32 << 20,
     /* 2^3 pages is the largest block */
     TOY_ARENA_MAX_ALLOC_TIER = 3,
-    TOY_ARENA_PROT_RW = 0,
-    TOY_ARENA_PROT_RX = 1,
-    TOY_ARENA_PROT_NONE = 2,
 };
 
 static_assert((1u << TOY_ARENA_MAX_ALLOC_TIER) == TOY_ARENA_MAX_BLOCK_PAGES,
@@ -51,7 +46,7 @@ typedef struct toy_arena_segment {
     int32_t free_head[TOY_ARENA_TIER_LIMIT];
     int32_t *free_next;
     int32_t *free_prev;
-    pthread_mutex_t lock;
+    toy_platform_lock lock;
 } toy_arena_segment;
 
 struct toy_arena {
@@ -68,13 +63,13 @@ struct toy_arena {
     int8_t *page_state;
     uint8_t *page_prot;
     /* Protects the cold counters and the home slot counter */
-    pthread_mutex_t stat_lock;
+    toy_platform_lock stat_lock;
     uint64_t alloc_failures;
     uint64_t mprotect_calls;
     uint32_t next_home_slot;
 
     /* Guarded mode only */
-    pthread_mutex_t guard_lock;
+    toy_platform_lock guard_lock;
     uint8_t *guard_used;
     uint32_t guard_hint;
     uint64_t guarded_alloc_count;
@@ -116,9 +111,9 @@ static bool toy_arena_block_pages_valid(uint32_t pages)
 
 static void toy_arena_bump_mprotect(toy_arena *arena)
 {
-    pthread_mutex_lock(&arena->stat_lock);
+    toy_platform_lock_acquire(&arena->stat_lock);
     arena->mprotect_calls++;
-    pthread_mutex_unlock(&arena->stat_lock);
+    toy_platform_lock_release(&arena->stat_lock);
 }
 
 static void toy_arena_segment_push_run(toy_arena *arena, toy_arena_segment *segment,
@@ -274,9 +269,9 @@ static void toy_arena_guarded_mark(toy_arena *arena, uint32_t start, uint32_t sp
 static uint32_t toy_arena_pick_home_segment(toy_arena *arena)
 {
     if (toy_arena_home_arena != arena) {
-        pthread_mutex_lock(&arena->stat_lock);
+        toy_platform_lock_acquire(&arena->stat_lock);
         uint32_t slot = arena->next_home_slot++;
-        pthread_mutex_unlock(&arena->stat_lock);
+        toy_platform_lock_release(&arena->stat_lock);
         toy_arena_home_arena = arena;
         toy_arena_home_slot = slot;
     }
@@ -302,11 +297,10 @@ toy_arena *toy_arena_create(const toy_arena_config *config)
         cfg.total_bytes = (size_t) TOY_ARENA_DEFAULT_BYTES;
     }
 
-    long page_size_value = sysconf(_SC_PAGESIZE);
-    if (page_size_value <= 0) {
+    size_t page_size = toy_platform_page_size();
+    if (page_size == 0) {
         return NULL;
     }
-    size_t page_size = (size_t) page_size_value;
     uint64_t requested_pages = (uint64_t) cfg.total_bytes / (uint64_t) page_size;
     if (requested_pages == 0 ||
         requested_pages > (UINT64_C(1) << (TOY_ARENA_TIER_LIMIT - 1))) {
@@ -343,15 +337,14 @@ toy_arena *toy_arena_create(const toy_arena_config *config)
     }
 
     size_t map_bytes = (size_t) usable_pages * page_size;
-    void *base = mmap(NULL, map_bytes, PROT_READ | PROT_WRITE,
-                      MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE, -1, 0);
-    if (base == MAP_FAILED) {
+    void *base = toy_platform_map(map_bytes);
+    if (base == NULL) {
         return NULL;
     }
 
     toy_arena *arena = calloc(1, sizeof(*arena));
     if (arena == NULL) {
-        munmap(base, map_bytes);
+        toy_platform_unmap(base, map_bytes);
         return NULL;
     }
     arena->kind = kind;
@@ -366,13 +359,13 @@ toy_arena *toy_arena_create(const toy_arena_config *config)
 
     arena->page_prot = calloc(usable_pages, sizeof(uint8_t));
     if (arena->page_prot == NULL) {
-        munmap(base, map_bytes);
+        toy_platform_unmap(base, map_bytes);
         free(arena);
         return NULL;
     }
-    if (pthread_mutex_init(&arena->stat_lock, NULL) != 0) {
+    if (!toy_platform_lock_init(&arena->stat_lock)) {
         free(arena->page_prot);
-        munmap(base, map_bytes);
+        toy_platform_unmap(base, map_bytes);
         free(arena);
         return NULL;
     }
@@ -380,11 +373,11 @@ toy_arena *toy_arena_create(const toy_arena_config *config)
     if (kind == TOY_ARENA_GUARDED) {
         arena->guard_used = calloc(usable_pages, sizeof(uint8_t));
         if (arena->guard_used == NULL ||
-            pthread_mutex_init(&arena->guard_lock, NULL) != 0) {
+            !toy_platform_lock_init(&arena->guard_lock)) {
             free(arena->guard_used);
-            pthread_mutex_destroy(&arena->stat_lock);
+            toy_platform_lock_destroy(&arena->stat_lock);
             free(arena->page_prot);
-            munmap(base, map_bytes);
+            toy_platform_unmap(base, map_bytes);
             free(arena);
             return NULL;
         }
@@ -396,9 +389,9 @@ toy_arena *toy_arena_create(const toy_arena_config *config)
     if (arena->page_state == NULL || arena->segments == NULL) {
         free(arena->segments);
         free(arena->page_state);
-        pthread_mutex_destroy(&arena->stat_lock);
+        toy_platform_lock_destroy(&arena->stat_lock);
         free(arena->page_prot);
-        munmap(base, map_bytes);
+        toy_platform_unmap(base, map_bytes);
         free(arena);
         return NULL;
     }
@@ -416,7 +409,7 @@ toy_arena *toy_arena_create(const toy_arena_config *config)
         segment->free_next = malloc((size_t) pages_per_segment * sizeof(int32_t));
         segment->free_prev = malloc((size_t) pages_per_segment * sizeof(int32_t));
         if (segment->free_next == NULL || segment->free_prev == NULL ||
-            pthread_mutex_init(&segment->lock, NULL) != 0) {
+            !toy_platform_lock_init(&segment->lock)) {
             init_ok = false;
             break;
         }
@@ -434,13 +427,13 @@ toy_arena *toy_arena_create(const toy_arena_config *config)
             free(arena->segments[s].free_prev);
         }
         for (uint32_t s = 0; s < inited_segments; s++) {
-            pthread_mutex_destroy(&arena->segments[s].lock);
+            toy_platform_lock_destroy(&arena->segments[s].lock);
         }
         free(arena->segments);
         free(arena->page_state);
-        pthread_mutex_destroy(&arena->stat_lock);
+        toy_platform_lock_destroy(&arena->stat_lock);
         free(arena->page_prot);
-        munmap(base, map_bytes);
+        toy_platform_unmap(base, map_bytes);
         free(arena);
         return NULL;
     }
@@ -453,21 +446,21 @@ void toy_arena_destroy(toy_arena *arena)
         return;
     }
     if (arena->kind == TOY_ARENA_GUARDED) {
-        pthread_mutex_destroy(&arena->guard_lock);
+        toy_platform_lock_destroy(&arena->guard_lock);
         free(arena->guard_used);
     } else {
         for (uint32_t s = 0; s < arena->segment_count; s++) {
             toy_arena_segment *segment = &arena->segments[s];
-            pthread_mutex_destroy(&segment->lock);
+            toy_platform_lock_destroy(&segment->lock);
             free(segment->free_next);
             free(segment->free_prev);
         }
         free(arena->segments);
         free(arena->page_state);
     }
-    pthread_mutex_destroy(&arena->stat_lock);
+    toy_platform_lock_destroy(&arena->stat_lock);
     free(arena->page_prot);
-    munmap(arena->base, arena->map_bytes);
+    toy_platform_unmap(arena->base, arena->map_bytes);
     free(arena);
 }
 
@@ -491,11 +484,12 @@ toy_arena_kind toy_arena_kind_of(const toy_arena *arena)
  * the current state, so an unchanged state costs no system call.
  */
 static bool toy_arena_protect(toy_arena *arena, uint32_t first_page, uint32_t pages,
-                              uint8_t prot)
+                              toy_platform_prot prot)
 {
+    uint8_t stored_prot = (uint8_t) prot;
     bool need = false;
     for (uint32_t i = 0; i < pages; i++) {
-        if (arena->page_prot[first_page + i] != prot) {
+        if (arena->page_prot[first_page + i] != stored_prot) {
             need = true;
             break;
         }
@@ -503,18 +497,12 @@ static bool toy_arena_protect(toy_arena *arena, uint32_t first_page, uint32_t pa
     if (!need) {
         return true;
     }
-    int native_prot = PROT_READ | PROT_WRITE;
-    if (prot == TOY_ARENA_PROT_RX) {
-        native_prot = PROT_READ | PROT_EXEC;
-    } else if (prot == TOY_ARENA_PROT_NONE) {
-        native_prot = PROT_NONE;
-    }
-    if (mprotect(arena->base + (size_t) first_page * arena->page_size,
-                 (size_t) pages * arena->page_size, native_prot) != 0) {
+    if (!toy_platform_protect(arena->base + (size_t) first_page * arena->page_size,
+                              (size_t) pages * arena->page_size, prot)) {
         return false;
     }
     for (uint32_t i = 0; i < pages; i++) {
-        arena->page_prot[first_page + i] = prot;
+        arena->page_prot[first_page + i] = stored_prot;
     }
     toy_arena_bump_mprotect(arena);
     return true;
@@ -527,9 +515,9 @@ static bool toy_arena_tiered_alloc(toy_arena *arena, uint32_t pages, toy_arena_b
     uint32_t chosen = UINT32_MAX;
     uint32_t local = 0;
 
-    pthread_mutex_lock(&arena->segments[home].lock);
+    toy_platform_lock_acquire(&arena->segments[home].lock);
     bool ok = toy_arena_segment_alloc_run(arena, &arena->segments[home], tier, &local);
-    pthread_mutex_unlock(&arena->segments[home].lock);
+    toy_platform_lock_release(&arena->segments[home].lock);
     if (ok) {
         chosen = home;
     }
@@ -540,11 +528,11 @@ static bool toy_arena_tiered_alloc(toy_arena *arena, uint32_t pages, toy_arena_b
             continue;
         }
         toy_arena_segment *segment = &arena->segments[i];
-        if (pthread_mutex_trylock(&segment->lock) != 0) {
+        if (!toy_platform_lock_try_acquire(&segment->lock)) {
             continue;
         }
         ok = toy_arena_segment_alloc_run(arena, segment, tier, &local);
-        pthread_mutex_unlock(&segment->lock);
+        toy_platform_lock_release(&segment->lock);
         if (ok) {
             chosen = i;
         }
@@ -552,9 +540,9 @@ static bool toy_arena_tiered_alloc(toy_arena *arena, uint32_t pages, toy_arena_b
 
     /* Retry the home segment once, in case another thread released a run */
     if (!ok) {
-        pthread_mutex_lock(&arena->segments[home].lock);
+        toy_platform_lock_acquire(&arena->segments[home].lock);
         ok = toy_arena_segment_alloc_run(arena, &arena->segments[home], tier, &local);
-        pthread_mutex_unlock(&arena->segments[home].lock);
+        toy_platform_lock_release(&arena->segments[home].lock);
         if (ok) {
             chosen = home;
         }
@@ -568,7 +556,7 @@ static bool toy_arena_tiered_alloc(toy_arena *arena, uint32_t pages, toy_arena_b
     block->pages = pages;
     block->guard_pages = 0;
     /* A reused block can still be RX. Switch it back to RW first. */
-    if (!toy_arena_protect(arena, (uint32_t) first_page, pages, TOY_ARENA_PROT_RW)) {
+    if (!toy_arena_protect(arena, (uint32_t) first_page, pages, TOY_PLATFORM_PROT_RW)) {
         toy_arena_free(arena, block);
         return false;
     }
@@ -580,7 +568,7 @@ static bool toy_arena_guarded_alloc(toy_arena *arena, uint32_t pages, toy_arena_
     uint32_t span = pages + 1;
     uint32_t start = 0;
 
-    pthread_mutex_lock(&arena->guard_lock);
+    toy_platform_lock_acquire(&arena->guard_lock);
     bool ok = toy_arena_guarded_find_run(arena, span, &start);
     if (ok) {
         toy_arena_guarded_mark(arena, start, span, 1);
@@ -590,20 +578,20 @@ static bool toy_arena_guarded_alloc(toy_arena *arena, uint32_t pages, toy_arena_
         }
         arena->guarded_alloc_count++;
     }
-    pthread_mutex_unlock(&arena->guard_lock);
+    toy_platform_lock_release(&arena->guard_lock);
     if (!ok) {
         return false;
     }
 
     uint8_t *code = arena->base + (size_t) start * arena->page_size;
     uint8_t *guard = code + (size_t) pages * arena->page_size;
-    if (!toy_arena_protect(arena, start, pages, TOY_ARENA_PROT_RW)) {
+    if (!toy_arena_protect(arena, start, pages, TOY_PLATFORM_PROT_RW)) {
         goto rollback;
     }
-    if (mprotect(guard, arena->page_size, PROT_NONE) != 0) {
+    if (!toy_platform_protect(guard, arena->page_size, TOY_PLATFORM_PROT_NONE)) {
         goto rollback;
     }
-    arena->page_prot[start + pages] = (uint8_t) TOY_ARENA_PROT_NONE;
+    arena->page_prot[start + pages] = (uint8_t) TOY_PLATFORM_PROT_NONE;
     toy_arena_bump_mprotect(arena);
     block->code = code;
     block->pages = pages;
@@ -611,9 +599,9 @@ static bool toy_arena_guarded_alloc(toy_arena *arena, uint32_t pages, toy_arena_
     return true;
 
 rollback:
-    pthread_mutex_lock(&arena->guard_lock);
+    toy_platform_lock_acquire(&arena->guard_lock);
     toy_arena_guarded_mark(arena, start, span, 0);
-    pthread_mutex_unlock(&arena->guard_lock);
+    toy_platform_lock_release(&arena->guard_lock);
     return false;
 }
 
@@ -629,9 +617,9 @@ bool toy_arena_alloc(toy_arena *arena, uint32_t pages, toy_arena_block *block)
         ok = toy_arena_tiered_alloc(arena, pages, block);
     }
     if (!ok) {
-        pthread_mutex_lock(&arena->stat_lock);
+        toy_platform_lock_acquire(&arena->stat_lock);
         arena->alloc_failures++;
-        pthread_mutex_unlock(&arena->stat_lock);
+        toy_platform_lock_release(&arena->stat_lock);
         block->code = NULL;
         block->pages = 0;
         block->guard_pages = 0;
@@ -703,15 +691,15 @@ void toy_arena_free(toy_arena *arena, toy_arena_block *block)
     }
 
     if (arena->kind == TOY_ARENA_GUARDED) {
-        pthread_mutex_lock(&arena->guard_lock);
+        toy_platform_lock_acquire(&arena->guard_lock);
         if (arena->guard_used[first_page] == 0) {
-            pthread_mutex_unlock(&arena->guard_lock);
+            toy_platform_lock_release(&arena->guard_lock);
             fprintf(stderr, "toy_arena_free: double free\n");
             abort();
         }
         toy_arena_guarded_mark(arena, first_page, span, 0);
         arena->guarded_free_count++;
-        pthread_mutex_unlock(&arena->guard_lock);
+        toy_platform_lock_release(&arena->guard_lock);
     } else {
         uint32_t tier = toy_arena_tier_of_pow2(block->pages);
         uint32_t segment_index = first_page / arena->pages_per_segment;
@@ -722,23 +710,13 @@ void toy_arena_free(toy_arena *arena, toy_arena_block *block)
             fprintf(stderr, "toy_arena_free: invalid or double free\n");
             abort();
         }
-        pthread_mutex_lock(&segment->lock);
+        toy_platform_lock_acquire(&segment->lock);
         toy_arena_segment_free_run(arena, segment, local, tier);
-        pthread_mutex_unlock(&segment->lock);
+        toy_platform_lock_release(&segment->lock);
     }
     block->code = NULL;
     block->pages = 0;
     block->guard_pages = 0;
-}
-
-static void toy_arena_flush_icache(const uint8_t *code, size_t bytes)
-{
-#if defined(__GNUC__) || defined(__clang__)
-    __builtin___clear_cache((char *) code, (char *) code + bytes);
-#else
-    (void) code;
-    (void) bytes;
-#endif
 }
 
 bool toy_arena_seal(toy_arena *arena, const toy_arena_block *block)
@@ -749,8 +727,8 @@ bool toy_arena_seal(toy_arena *arena, const toy_arena_block *block)
         !toy_arena_locate_block(arena, block, &first_page, &span)) {
         return false;
     }
-    toy_arena_flush_icache(block->code, (size_t) block->pages * arena->page_size);
-    return toy_arena_protect(arena, first_page, block->pages, TOY_ARENA_PROT_RX);
+    toy_platform_flush_icache(block->code, (size_t) block->pages * arena->page_size);
+    return toy_arena_protect(arena, first_page, block->pages, TOY_PLATFORM_PROT_RX);
 }
 
 bool toy_arena_unseal(toy_arena *arena, const toy_arena_block *block)
@@ -761,7 +739,7 @@ bool toy_arena_unseal(toy_arena *arena, const toy_arena_block *block)
         !toy_arena_locate_block(arena, block, &first_page, &span)) {
         return false;
     }
-    return toy_arena_protect(arena, first_page, block->pages, TOY_ARENA_PROT_RW);
+    return toy_arena_protect(arena, first_page, block->pages, TOY_PLATFORM_PROT_RW);
 }
 
 void toy_arena_get_stats(toy_arena *arena, toy_arena_stats *stats)
@@ -774,7 +752,7 @@ void toy_arena_get_stats(toy_arena *arena, toy_arena_stats *stats)
     stats->total_pages = arena->page_count;
 
     if (arena->kind == TOY_ARENA_GUARDED) {
-        pthread_mutex_lock(&arena->guard_lock);
+        toy_platform_lock_acquire(&arena->guard_lock);
         stats->alloc_calls = arena->guarded_alloc_count;
         stats->free_calls = arena->guarded_free_count;
         uint64_t used = 0;
@@ -797,12 +775,12 @@ void toy_arena_get_stats(toy_arena *arena, toy_arena_stats *stats)
             }
         }
         stats->largest_free_run_pages = best;
-        pthread_mutex_unlock(&arena->guard_lock);
+        toy_platform_lock_release(&arena->guard_lock);
 
-        pthread_mutex_lock(&arena->stat_lock);
+        toy_platform_lock_acquire(&arena->stat_lock);
         stats->alloc_failures = arena->alloc_failures;
         stats->mprotect_calls = arena->mprotect_calls;
-        pthread_mutex_unlock(&arena->stat_lock);
+        toy_platform_lock_release(&arena->stat_lock);
         return;
     }
 
@@ -810,7 +788,7 @@ void toy_arena_get_stats(toy_arena *arena, toy_arena_stats *stats)
     uint64_t most_free_pages = 0;
     for (uint32_t s = 0; s < arena->segment_count; s++) {
         toy_arena_segment *segment = &arena->segments[s];
-        pthread_mutex_lock(&segment->lock);
+        toy_platform_lock_acquire(&segment->lock);
         stats->alloc_calls += segment->counters.alloc_count;
         stats->free_calls += segment->counters.free_count;
         stats->split_count += segment->counters.split_count;
@@ -837,14 +815,14 @@ void toy_arena_get_stats(toy_arena *arena, toy_arena_stats *stats)
                 most_free_pages = tier_pages;
             }
         }
-        pthread_mutex_unlock(&segment->lock);
+        toy_platform_lock_release(&segment->lock);
     }
     stats->used_pages = used;
     stats->free_pages = arena->page_count - used;
     stats->largest_free_run_pages = most_free_pages;
 
-    pthread_mutex_lock(&arena->stat_lock);
+    toy_platform_lock_acquire(&arena->stat_lock);
     stats->alloc_failures = arena->alloc_failures;
     stats->mprotect_calls = arena->mprotect_calls;
-    pthread_mutex_unlock(&arena->stat_lock);
+    toy_platform_lock_release(&arena->stat_lock);
 }

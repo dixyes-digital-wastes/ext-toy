@@ -2,27 +2,38 @@
  * Standalone C tests for the kernel arena and the spec cache
  * This file does not link against PHP
  *
- * Build and run:
+ * Build and run on POSIX:
  *   cc -std=gnu23 -Wall -Wextra -Werror -O2 -pthread -Iext/tensor \
  *      ext/tensor/tests/c/toy_arena_test.c ext/tensor/toy_arena.c \
  *      ext/tensor/toy_spec_cache.c -o /tmp/toy_arena_test
  *   /tmp/toy_arena_test
+ *
+ * Build and run on Windows from a vcvars64 shell:
+ *   cl /nologo /std:clatest /W4 /WX /O2 toy_arena.c toy_spec_cache.c \
+ *      toy_arena_test.c /Fe:toy_arena_test.exe
+ *   toy_arena_test.exe
  */
 
-#include <pthread.h>
-#include <signal.h>
 #include <stdalign.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/wait.h>
-#include <unistd.h>
+
+#ifdef _WIN32
+# include <process.h>
+# include <windows.h>
+#else
+# include <pthread.h>
+# include <signal.h>
+# include <sys/wait.h>
+# include <unistd.h>
+#endif
 
 #include "toy_arena.h"
 #include "toy_spec_cache.h"
 
-#if defined(__x86_64__) || defined(__i386__)
+#if defined(_M_X64) || defined(__x86_64__) || defined(_M_IX86) || defined(__i386__)
 # define TOY_TEST_HAVE_MACHINE_CODE 1
 #else
 # define TOY_TEST_HAVE_MACHINE_CODE 0
@@ -42,12 +53,12 @@ static int failures;
 /* mov eax, imm32; ret */
 static void toy_test_write_return_stub(uint8_t *code, int value)
 {
-    code[0] = 0xb8;
+    code[0] = (uint8_t) 0xb8;
     code[1] = (uint8_t) (value & 0xff);
     code[2] = (uint8_t) ((value >> 8) & 0xff);
     code[3] = (uint8_t) ((value >> 16) & 0xff);
     code[4] = (uint8_t) ((value >> 24) & 0xff);
-    code[5] = 0xc3;
+    code[5] = (uint8_t) 0xc3;
 }
 
 static int toy_test_call_code(const uint8_t *code)
@@ -59,9 +70,37 @@ static int toy_test_call_code(const uint8_t *code)
 }
 #endif
 
-static bool toy_test_map_perms(const void *address, char perms[5])
+typedef enum toy_test_protection {
+    TOY_TEST_PROT_RW,
+    TOY_TEST_PROT_RX,
+    TOY_TEST_PROT_NONE,
+} toy_test_protection;
+
+/* Checks the page protection. Rejects a writable executable page. */
+static bool toy_test_check_protection(const uint8_t *code, toy_test_protection expected)
 {
-#if defined(__linux__)
+#ifdef _WIN32
+    MEMORY_BASIC_INFORMATION info;
+    if (VirtualQuery(code, &info, sizeof(info)) == 0 || info.State != MEM_COMMIT) {
+        return false;
+    }
+    DWORD expected_prot = PAGE_NOACCESS;
+    if (expected == TOY_TEST_PROT_RW) {
+        expected_prot = PAGE_READWRITE;
+    } else if (expected == TOY_TEST_PROT_RX) {
+        expected_prot = PAGE_EXECUTE_READ;
+    }
+    if (info.Protect != expected_prot) {
+        return false;
+    }
+    return info.Protect != PAGE_EXECUTE_READWRITE && info.Protect != PAGE_EXECUTE_WRITECOPY;
+#elif defined(__linux__)
+    const char *expected_perms = "rw-p";
+    if (expected == TOY_TEST_PROT_RX) {
+        expected_perms = "r-xp";
+    } else if (expected == TOY_TEST_PROT_NONE) {
+        expected_perms = "---p";
+    }
     FILE *maps = fopen("/proc/self/maps", "r");
     if (maps == NULL) {
         return false;
@@ -70,53 +109,30 @@ static bool toy_test_map_perms(const void *address, char perms[5])
     unsigned long start = 0;
     unsigned long end = 0;
     char found[5] = { 0 };
+    bool ok = false;
     while (fgets(line, sizeof(line), maps) != NULL) {
         if (sscanf(line, "%lx-%lx %4s", &start, &end, found) != 3) {
             continue;
         }
-        if ((uintptr_t) address >= start && (uintptr_t) address < end) {
-            memcpy(perms, found, 5);
-            fclose(maps);
-            return true;
+        if ((uintptr_t) code >= start && (uintptr_t) code < end) {
+            bool no_write_execute = !(strchr(found, 'w') != NULL && strchr(found, 'x') != NULL);
+            ok = strcmp(found, expected_perms) == 0 && no_write_execute;
+            break;
         }
     }
     fclose(maps);
-    return false;
+    return ok;
 #else
-    (void) address;
-    (void) perms;
+    (void) code;
+    (void) expected;
     return false;
 #endif
 }
 
-/* Checks the mapping permissions and rejects a writable executable mapping */
-static bool toy_test_check_perms(const uint8_t *code, const char *expected)
-{
-    char perms[5] = { 0 };
-    if (!toy_test_map_perms(code, perms)) {
-        return false;
-    }
-    bool no_write_execute = !(strchr(perms, 'w') != NULL && strchr(perms, 'x') != NULL);
-    return strcmp(perms, expected) == 0 && no_write_execute;
-}
-
-static void toy_test_segv_exit(int signal_number)
-{
-    (void) signal_number;
-    _exit(42);
-}
-
-static void toy_test_install_segv_exit(void)
-{
-    struct sigaction action = { 0 };
-    action.sa_handler = toy_test_segv_exit;
-    action.sa_flags = SA_RESETHAND | SA_NODEFER;
-    sigemptyset(&action.sa_mask);
-    sigaction(SIGSEGV, &action, NULL);
-}
-
+#ifndef _WIN32
 typedef int (*ToyTestChildAction)(void *);
 
+/* Runs the action in a child. Returns the exit code or the negative signal. */
 static int toy_test_run_child(ToyTestChildAction action, void *argument)
 {
     pid_t pid = fork();
@@ -138,6 +154,7 @@ static int toy_test_run_child(ToyTestChildAction action, void *argument)
     }
     return -1;
 }
+#endif
 
 typedef struct toy_test_write_probe {
     uint8_t *code;
@@ -145,21 +162,61 @@ typedef struct toy_test_write_probe {
     uint8_t value;
 } toy_test_write_probe;
 
-static int toy_test_action_write(void *argument)
+#ifndef _WIN32
+static int toy_test_child_write(void *argument)
 {
-    toy_test_install_segv_exit();
     toy_test_write_probe *probe = argument;
     probe->code[probe->offset] = probe->value;
     return 0;
 }
 
-static int toy_test_action_execute(void *argument)
+static int toy_test_child_execute(void *argument)
 {
 #if TOY_TEST_HAVE_MACHINE_CODE
     return toy_test_call_code(argument) & 0xff;
 #else
     (void) argument;
     return 0;
+#endif
+}
+#endif
+
+/* Returns true when the write faults. The page must stay unchanged. */
+static bool toy_test_write_faults(uint8_t *code, size_t offset, uint8_t value)
+{
+#ifdef _WIN32
+    volatile bool faulted = false;
+    __try {
+        code[offset] = value;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        faulted = true;
+    }
+    return faulted;
+#else
+    toy_test_write_probe probe = { .code = code, .offset = offset, .value = value };
+    int result = toy_test_run_child(toy_test_child_write, &probe);
+    return result == -SIGSEGV || result == -SIGBUS;
+#endif
+}
+
+/* Returns true when execution faults, as it does on a writable page. */
+static bool toy_test_execute_faults(const uint8_t *code)
+{
+#ifdef _WIN32
+    volatile bool faulted = false;
+    volatile int result = 0;
+    __try {
+        int (*function)(void);
+        memcpy(&function, &code, sizeof(function));
+        result = function();
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        faulted = true;
+    }
+    (void) result;
+    return faulted;
+#else
+    int result = toy_test_run_child(toy_test_child_execute, (void *) code);
+    return result == -SIGSEGV || result == -SIGBUS;
 #endif
 }
 
@@ -252,16 +309,16 @@ static void test_tiers(void)
         CHECK(block.pages == pages);
         CHECK(block.guard_pages == 0);
         CHECK((uintptr_t) block.code % page_size == 0);
-        CHECK(toy_test_check_perms(block.code, "rw-p"));
+        CHECK(toy_test_check_protection(block.code, TOY_TEST_PROT_RW));
         for (size_t page = 0; page < pages; page++) {
             block.code[page * page_size] = (uint8_t) (0x10 + page);
             block.code[page * page_size + page_size - 1] = 0x7f;
         }
         CHECK(toy_arena_seal(arena, &block));
-        CHECK(toy_test_check_perms(block.code, "r-xp"));
+        CHECK(toy_test_check_protection(block.code, TOY_TEST_PROT_RX));
         CHECK(block.code[0] == 0x10);
         CHECK(toy_arena_unseal(arena, &block));
-        CHECK(toy_test_check_perms(block.code, "rw-p"));
+        CHECK(toy_test_check_protection(block.code, TOY_TEST_PROT_RW));
 #if TOY_TEST_HAVE_MACHINE_CODE
         toy_test_write_return_stub(block.code, (int) pages);
         CHECK(toy_arena_seal(arena, &block));
@@ -320,24 +377,24 @@ static void test_wx(void)
     toy_arena_block block = { 0 };
     CHECK(toy_arena_alloc(arena, 2, &block));
     toy_test_write_return_stub(block.code, 42);
-    CHECK(toy_test_check_perms(block.code, "rw-p"));
+    CHECK(toy_test_check_protection(block.code, TOY_TEST_PROT_RW));
+    /* A writable page rejects execution */
+    CHECK(toy_test_execute_faults(block.code));
+
     CHECK(toy_arena_seal(arena, &block));
-    CHECK(toy_test_check_perms(block.code, "r-xp"));
+    CHECK(toy_test_check_protection(block.code, TOY_TEST_PROT_RX));
     CHECK(toy_test_call_code(block.code) == 42);
-    CHECK(toy_test_run_child(toy_test_action_execute, block.code) == 42);
+    CHECK(!toy_test_execute_faults(block.code));
 
     /* A sealed page rejects a write */
-    toy_test_write_probe probe = { .code = block.code, .offset = 0, .value = 0x90 };
-    CHECK(toy_test_run_child(toy_test_action_write, &probe) == 42);
+    CHECK(toy_test_write_faults(block.code, 0, 0x90));
 
     CHECK(toy_arena_unseal(arena, &block));
-    CHECK(toy_test_check_perms(block.code, "rw-p"));
-    /* A writable page rejects execution */
-    int execute_result = toy_test_run_child(toy_test_action_execute, block.code);
-    CHECK(execute_result == -SIGSEGV || execute_result == -SIGBUS);
+    CHECK(toy_test_check_protection(block.code, TOY_TEST_PROT_RW));
+    CHECK(toy_test_execute_faults(block.code));
 
     CHECK(toy_arena_seal(arena, &block));
-    CHECK(toy_test_run_child(toy_test_action_execute, block.code) == 42);
+    CHECK(toy_test_call_code(block.code) == 42);
     toy_arena_free(arena, &block);
     toy_arena_destroy(arena);
 #endif
@@ -361,12 +418,12 @@ static void test_reuse(void)
 
     /* A freed block keeps its protection until the next allocation */
     toy_arena_block freed = { .code = address, .pages = 1, .guard_pages = 0 };
-    CHECK(toy_test_check_perms(freed.code, "r-xp"));
+    CHECK(toy_test_check_protection(freed.code, TOY_TEST_PROT_RX));
 
     toy_arena_block second = { 0 };
     CHECK(toy_arena_alloc(arena, 1, &second));
     CHECK(second.code == address);
-    CHECK(toy_test_check_perms(second.code, "rw-p"));
+    CHECK(toy_test_check_protection(second.code, TOY_TEST_PROT_RW));
     second.code[0] = 0xbb;
     CHECK(second.code[0] == 0xbb);
     CHECK(toy_arena_seal(arena, &second));
@@ -443,18 +500,17 @@ static void test_guarded(void)
     toy_arena_block block = { 0 };
     CHECK(toy_arena_alloc(arena, 1, &block));
     CHECK(block.guard_pages == 1);
-    CHECK(toy_test_check_perms(block.code, "rw-p"));
-    CHECK(toy_test_check_perms(block.code + page_size, "---p"));
+    CHECK(toy_test_check_protection(block.code, TOY_TEST_PROT_RW));
+    CHECK(toy_test_check_protection(block.code + page_size, TOY_TEST_PROT_NONE));
     block.code[0] = 0x55;
     CHECK(block.code[0] == 0x55);
 
     /* The guard page catches a write beyond the block */
-    toy_test_write_probe probe = { .code = block.code, .offset = page_size, .value = 0x11 };
-    CHECK(toy_test_run_child(toy_test_action_write, &probe) == 42);
+    CHECK(toy_test_write_faults(block.code, page_size, 0x11));
 
     CHECK(toy_arena_seal(arena, &block));
-    CHECK(toy_test_check_perms(block.code, "r-xp"));
-    CHECK(toy_test_check_perms(block.code + page_size, "---p"));
+    CHECK(toy_test_check_protection(block.code, TOY_TEST_PROT_RX));
+    CHECK(toy_test_check_protection(block.code + page_size, TOY_TEST_PROT_NONE));
 
     toy_arena_stats stats;
     toy_arena_get_stats(arena, &stats);
@@ -546,7 +602,7 @@ static void test_cache(void)
     CHECK(fill_calls == 1);
     CHECK(first.pages == 1);
     CHECK(first.guard_pages == 0);
-    CHECK(toy_test_check_perms(first.code, "r-xp"));
+    CHECK(toy_test_check_protection(first.code, TOY_TEST_PROT_RX));
 #if TOY_TEST_HAVE_MACHINE_CODE
     CHECK(toy_test_call_code(first.code) == 0);
 #endif
@@ -671,6 +727,14 @@ static void *toy_test_thread_main(void *argument)
     return NULL;
 }
 
+#ifdef _WIN32
+static unsigned __stdcall toy_test_thread_entry(void *argument)
+{
+    toy_test_thread_main(argument);
+    return 0;
+}
+#endif
+
 static void test_threads(void)
 {
     printf("test_threads\n");
@@ -681,22 +745,38 @@ static void test_threads(void)
     }
 
     enum { thread_count = 4 };
+#ifdef _WIN32
+    HANDLE threads[thread_count];
+#else
     pthread_t threads[thread_count];
+#endif
+    bool started[thread_count] = { false };
     toy_test_thread_state states[thread_count];
-    int started = 0;
     for (int i = 0; i < thread_count; i++) {
         states[i] = (toy_test_thread_state) {
             .arena = arena,
             .seed = (uint64_t) (i + 1) * UINT64_C(0x9e3779b97f4a7c15),
         };
-        if (pthread_create(&threads[i], NULL, toy_test_thread_main, &states[i]) == 0) {
-            started++;
-        } else {
+#ifdef _WIN32
+        threads[i] = (HANDLE) _beginthreadex(NULL, 0, toy_test_thread_entry, &states[i], 0, NULL);
+        started[i] = threads[i] != NULL;
+#else
+        started[i] = pthread_create(&threads[i], NULL, toy_test_thread_main, &states[i]) == 0;
+#endif
+        if (!started[i]) {
             states[i].error = 1;
         }
     }
-    for (int i = 0; i < started; i++) {
+    for (int i = 0; i < thread_count; i++) {
+        if (!started[i]) {
+            continue;
+        }
+#ifdef _WIN32
+        WaitForSingleObject(threads[i], INFINITE);
+        CloseHandle(threads[i]);
+#else
         pthread_join(threads[i], NULL);
+#endif
     }
     for (int i = 0; i < thread_count; i++) {
         CHECK(states[i].error == 0);
