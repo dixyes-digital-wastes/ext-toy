@@ -4,7 +4,7 @@
  *
  * Build and run:
  *   cc -std=gnu23 -Wall -Wextra -I. -Icodegen/include \
- *      tests/c/tensor_test.c toy_tensor.c codegen/src/ref.c \
+ *      tests/c/tensor_test.c tensor.c codegen/src/ref.c \
  *      codegen/src/q8_0.c -lm -o tensor_test
  *   ./tensor_test
  */
@@ -16,7 +16,7 @@
 #include <string.h>
 
 #include "toy/ref.h"
-#include "toy_tensor.h"
+#include "tensor.h"
 
 static_assert(TOY_TENSOR_ALIGNMENT == 64, "test buffer alignment");
 
@@ -41,17 +41,17 @@ static void check_near(float actual, float expected, float tolerance, const char
 
 static void test_dtype(void)
 {
-    toy_dtype dtype;
+    dtype dtype_value;
 
-    CHECK(strcmp(toy_dtype_name(TOY_DTYPE_F32), "f32") == 0);
-    CHECK(strcmp(toy_dtype_name(TOY_DTYPE_Q8_0), "q8_0") == 0);
-    CHECK(strcmp(toy_dtype_name(TOY_DTYPE_INVALID), "invalid") == 0);
+    CHECK(strcmp(dtype_to_name(TOY_DTYPE_F32), "f32") == 0);
+    CHECK(strcmp(dtype_to_name(TOY_DTYPE_Q8_0), "q8_0") == 0);
+    CHECK(strcmp(dtype_to_name(TOY_DTYPE_INVALID), "invalid") == 0);
 
-    CHECK(toy_dtype_from_name("f32", 3, &dtype) && dtype == TOY_DTYPE_F32);
-    CHECK(toy_dtype_from_name("q8_0", 4, &dtype) && dtype == TOY_DTYPE_Q8_0);
-    CHECK(toy_dtype_from_name("bf16", 4, &dtype) && dtype == TOY_DTYPE_BF16);
-    CHECK(!toy_dtype_from_name("f64", 3, &dtype));
-    CHECK(!toy_dtype_from_name("F32", 3, &dtype));
+    CHECK(dtype_from_name("f32", 3, &dtype_value) && dtype_value == TOY_DTYPE_F32);
+    CHECK(dtype_from_name("q8_0", 4, &dtype_value) && dtype_value == TOY_DTYPE_Q8_0);
+    CHECK(dtype_from_name("bf16", 4, &dtype_value) && dtype_value == TOY_DTYPE_BF16);
+    CHECK(!dtype_from_name("f64", 3, &dtype_value));
+    CHECK(!dtype_from_name("F32", 3, &dtype_value));
 }
 
 static void test_shape_bytes(void)
@@ -63,61 +63,61 @@ static void test_shape_bytes(void)
     uint32_t dims_zero[4] = { 2, 0, 0, 0 };
     uint32_t dims_over[4] = { UINT32_MAX, UINT32_MAX, UINT32_MAX, UINT32_MAX };
 
-    CHECK(toy_tensor_shape_bytes(TOY_DTYPE_F32, 2, dims2, &bytes) == TOY_OK && bytes == 24);
-    CHECK(toy_tensor_shape_bytes(TOY_DTYPE_F16, 2, dims2, &bytes) == TOY_OK && bytes == 12);
-    CHECK(toy_tensor_shape_bytes(TOY_DTYPE_BF16, 2, dims2, &bytes) == TOY_OK && bytes == 12);
-    CHECK(toy_tensor_shape_bytes(TOY_DTYPE_I8, 2, dims2, &bytes) == TOY_OK && bytes == 6);
-    CHECK(toy_tensor_shape_bytes(TOY_DTYPE_Q8_0, 2, dims_q8, &bytes) == TOY_OK && bytes == 68);
+    CHECK(tensor_shape_bytes(TOY_DTYPE_F32, 2, dims2, &bytes) == TOY_OK && bytes == 24);
+    CHECK(tensor_shape_bytes(TOY_DTYPE_F16, 2, dims2, &bytes) == TOY_OK && bytes == 12);
+    CHECK(tensor_shape_bytes(TOY_DTYPE_BF16, 2, dims2, &bytes) == TOY_OK && bytes == 12);
+    CHECK(tensor_shape_bytes(TOY_DTYPE_I8, 2, dims2, &bytes) == TOY_OK && bytes == 6);
+    CHECK(tensor_shape_bytes(TOY_DTYPE_Q8_0, 2, dims_q8, &bytes) == TOY_OK && bytes == 68);
 
-    CHECK(toy_tensor_shape_bytes(TOY_DTYPE_Q8_0, 2, dims_bad_q8, &bytes) == TOY_ERROR_SHAPE);
-    CHECK(toy_tensor_shape_bytes(TOY_DTYPE_F32, 2, dims_zero, &bytes) == TOY_ERROR_SHAPE);
-    CHECK(toy_tensor_shape_bytes(TOY_DTYPE_F32, 0, dims2, &bytes) == TOY_ERROR_SHAPE);
-    CHECK(toy_tensor_shape_bytes(TOY_DTYPE_F32, 5, dims2, &bytes) == TOY_ERROR_SHAPE);
-    CHECK(toy_tensor_shape_bytes(TOY_DTYPE_INVALID, 2, dims2, &bytes) == TOY_ERROR_DTYPE);
-    CHECK(toy_tensor_shape_bytes(TOY_DTYPE_F32, 4, dims_over, &bytes) == TOY_ERROR_OVERFLOW);
+    CHECK(tensor_shape_bytes(TOY_DTYPE_Q8_0, 2, dims_bad_q8, &bytes) == TOY_ERROR_SHAPE);
+    CHECK(tensor_shape_bytes(TOY_DTYPE_F32, 2, dims_zero, &bytes) == TOY_ERROR_SHAPE);
+    CHECK(tensor_shape_bytes(TOY_DTYPE_F32, 0, dims2, &bytes) == TOY_ERROR_SHAPE);
+    CHECK(tensor_shape_bytes(TOY_DTYPE_F32, 5, dims2, &bytes) == TOY_ERROR_SHAPE);
+    CHECK(tensor_shape_bytes(TOY_DTYPE_INVALID, 2, dims2, &bytes) == TOY_ERROR_DTYPE);
+    CHECK(tensor_shape_bytes(TOY_DTYPE_F32, 4, dims_over, &bytes) == TOY_ERROR_OVERFLOW);
 }
 
 static void test_alloc(void)
 {
     uint32_t dims[4] = { 4, 8, 0, 0 };
-    toy_status status = TOY_ERROR_MEMORY;
-    toy_tensor *tensor = toy_tensor_alloc(TOY_DTYPE_F32, 2, dims, &status);
+    tensor_status status = TOY_ERROR_MEMORY;
+    tensor *tensor_value = tensor_alloc(TOY_DTYPE_F32, 2, dims, &status);
 
-    CHECK(tensor != NULL);
+    CHECK(tensor_value != NULL);
     CHECK(status == TOY_OK);
-    if (!tensor) {
+    if (!tensor_value) {
         return;
     }
 
-    CHECK(tensor->refcount == 1);
-    CHECK((tensor->flags & TOY_TENSOR_FLAG_OWNS_DATA) != 0);
-    CHECK((tensor->flags & TOY_TENSOR_FLAG_ALIAS) == 0);
-    CHECK(tensor->buffer != NULL);
-    CHECK(tensor->bytes == 128);
-    CHECK(tensor->rank == 2);
-    CHECK(tensor->dims[0] == 4 && tensor->dims[1] == 8);
-    CHECK(toy_tensor_numel(tensor) == 32);
-    CHECK(((uintptr_t) toy_tensor_data(tensor) % TOY_TENSOR_ALIGNMENT) == 0);
+    CHECK(tensor_value->refcount == 1);
+    CHECK((tensor_value->flags & TOY_TENSOR_FLAG_OWNS_DATA) != 0);
+    CHECK((tensor_value->flags & TOY_TENSOR_FLAG_ALIAS) == 0);
+    CHECK(tensor_value->buffer != NULL);
+    CHECK(tensor_value->bytes == 128);
+    CHECK(tensor_value->rank == 2);
+    CHECK(tensor_value->dims[0] == 4 && tensor_value->dims[1] == 8);
+    CHECK(tensor_numel(tensor_value) == 32);
+    CHECK(((uintptr_t) tensor_data(tensor_value) % TOY_TENSOR_ALIGNMENT) == 0);
 
-    const float *data = toy_tensor_data(tensor);
+    const float *data = tensor_data(tensor_value);
     for (size_t i = 0; i < 32; i++) {
         CHECK(data[i] == 0.0f);
     }
 
-    toy_tensor_retain(tensor);
-    toy_tensor_release(tensor);
-    CHECK(toy_tensor_numel(tensor) == 32);
+    tensor_retain(tensor_value);
+    tensor_release(tensor_value);
+    CHECK(tensor_numel(tensor_value) == 32);
 
-    tensor = toy_tensor_retain(tensor);
-    toy_tensor_release(tensor);
-    toy_tensor_release(tensor);
+    tensor_value = tensor_retain(tensor_value);
+    tensor_release(tensor_value);
+    tensor_release(tensor_value);
 
     uint32_t small[4] = { 1, 0, 0, 0 };
-    toy_tensor *i8_tensor = toy_tensor_alloc(TOY_DTYPE_I8, 1, small, &status);
+    tensor *i8_tensor = tensor_alloc(TOY_DTYPE_I8, 1, small, &status);
     CHECK(i8_tensor != NULL && i8_tensor->bytes == 1);
     if (i8_tensor) {
-        CHECK(((uintptr_t) toy_tensor_data(i8_tensor) % TOY_TENSOR_ALIGNMENT) == 0);
-        toy_tensor_release(i8_tensor);
+        CHECK(((uintptr_t) tensor_data(i8_tensor) % TOY_TENSOR_ALIGNMENT) == 0);
+        tensor_release(i8_tensor);
     }
 }
 
@@ -127,33 +127,33 @@ static void test_reshape_clone(void)
     uint32_t wide[4] = { 2, 16, 0, 0 };
     uint32_t bad[4] = { 2, 7, 0, 0 };
 
-    toy_tensor *tensor = toy_tensor_alloc(TOY_DTYPE_F32, 2, dims, NULL);
-    CHECK(tensor != NULL);
-    if (!tensor) {
+    tensor *tensor_value = tensor_alloc(TOY_DTYPE_F32, 2, dims, NULL);
+    CHECK(tensor_value != NULL);
+    if (!tensor_value) {
         return;
     }
 
-    float *data = toy_tensor_data(tensor);
+    float *data = tensor_data(tensor_value);
     for (size_t i = 0; i < 32; i++) {
         data[i] = (float) i;
     }
 
-    CHECK(toy_tensor_reshape(tensor, 2, wide) == TOY_OK);
-    CHECK(tensor->dims[0] == 2 && tensor->dims[1] == 16);
-    CHECK(toy_tensor_reshape(tensor, 2, bad) == TOY_ERROR_BYTES);
+    CHECK(tensor_reshape(tensor_value, 2, wide) == TOY_OK);
+    CHECK(tensor_value->dims[0] == 2 && tensor_value->dims[1] == 16);
+    CHECK(tensor_reshape(tensor_value, 2, bad) == TOY_ERROR_BYTES);
 
-    toy_status status;
-    toy_tensor *copy = toy_tensor_clone(tensor, &status);
+    tensor_status status;
+    tensor *copy = tensor_clone(tensor_value, &status);
     CHECK(copy != NULL);
     if (copy) {
-        CHECK(copy->data != tensor->data);
-        CHECK(copy->bytes == tensor->bytes);
-        CHECK(memcmp(copy->data, tensor->data, tensor->bytes) == 0);
+        CHECK(copy->data != tensor_value->data);
+        CHECK(copy->bytes == tensor_value->bytes);
+        CHECK(memcmp(copy->data, tensor_value->data, tensor_value->bytes) == 0);
         ((float *) copy->data)[0] = -1.0f;
-        CHECK(((float *) tensor->data)[0] == 0.0f);
-        toy_tensor_release(copy);
+        CHECK(((float *) tensor_value->data)[0] == 0.0f);
+        tensor_release(copy);
     }
-    toy_tensor_release(tensor);
+    tensor_release(tensor_value);
 }
 
 static void test_alias(void)
@@ -168,7 +168,7 @@ static void test_alias(void)
         external[i] = (unsigned char) i;
     }
 
-    toy_tensor *alias = toy_tensor_alias(external, sizeof(external), TOY_DTYPE_F32, 2, dims);
+    tensor *alias = toy_tensor_alias(external, sizeof(external), TOY_DTYPE_F32, 2, dims);
     CHECK(alias != NULL);
     if (!alias) {
         return;
@@ -179,17 +179,17 @@ static void test_alias(void)
     CHECK(alias->flags == TOY_TENSOR_FLAG_ALIAS);
     CHECK((alias->flags & TOY_TENSOR_FLAG_OWNS_DATA) == 0);
     CHECK(alias->bytes == sizeof(external));
-    CHECK(toy_tensor_numel(alias) == 32);
-    CHECK(((unsigned char *) toy_tensor_data(alias))[7] == 7);
+    CHECK(tensor_numel(alias) == 32);
+    CHECK(((unsigned char *) tensor_data(alias))[7] == 7);
 
-    toy_tensor_retain(alias);
-    toy_tensor_release(alias);
+    tensor_retain(alias);
+    tensor_release(alias);
     CHECK(alias->refcount == 1);
 
-    CHECK(toy_tensor_reshape(alias, 2, wide) == TOY_OK);
+    CHECK(tensor_reshape(alias, 2, wide) == TOY_OK);
     CHECK(alias->dims[0] == 2 && alias->dims[1] == 16);
 
-    toy_tensor_release(alias);
+    tensor_release(alias);
 
     for (size_t i = 0; i < sizeof(external); i++) {
         CHECK(external[i] == (unsigned char) i);
@@ -201,11 +201,11 @@ static void test_alias(void)
     CHECK(toy_tensor_alias(external, 128, TOY_DTYPE_INVALID, 2, dims) == NULL);
     CHECK(toy_tensor_alias(external, 128, TOY_DTYPE_F32, 0, dims) == NULL);
 
-    toy_tensor *q8_alias = toy_tensor_alias(external, 34, TOY_DTYPE_Q8_0, 2, q8_dims);
+    tensor *q8_alias = toy_tensor_alias(external, 34, TOY_DTYPE_Q8_0, 2, q8_dims);
     CHECK(q8_alias != NULL);
     if (q8_alias) {
         CHECK(q8_alias->bytes == 34);
-        toy_tensor_release(q8_alias);
+        tensor_release(q8_alias);
     }
 }
 
@@ -215,7 +215,7 @@ static void test_kernels(void)
     float b[4] = { 5.0f, 6.0f, 7.0f, 8.0f };
     float c[4] = { 0 };
 
-    toy_ref_gemm(2, 2, 2, a, b, c);
+    ref_gemm(2, 2, 2, a, b, c);
     check_near(c[0], 19.0f, test_tolerance, "matmul[0]");
     check_near(c[1], 22.0f, test_tolerance, "matmul[1]");
     check_near(c[2], 43.0f, test_tolerance, "matmul[2]");
@@ -223,7 +223,7 @@ static void test_kernels(void)
 
     float x[2] = { 5.0f, 6.0f };
     float y[2] = { 0 };
-    toy_ref_matvec(2, 2, a, x, y);
+    ref_matvec(2, 2, a, x, y);
     check_near(y[0], 17.0f, test_tolerance, "matvec[0]");
     check_near(y[1], 39.0f, test_tolerance, "matvec[1]");
 

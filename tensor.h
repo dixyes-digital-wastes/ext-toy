@@ -1,5 +1,5 @@
-#ifndef TOY_TENSOR_H
-#define TOY_TENSOR_H
+#ifndef TENSOR_H
+#define TENSOR_H
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -32,46 +32,46 @@ static_assert(TOY_TENSOR_Q8_0_BLOCK_VALUES == 32, "q8_0 block size matches ggml"
 static_assert(TOY_TENSOR_Q8_0_BLOCK_BYTES == 34, "q8_0 block layout matches ggml");
 static_assert(sizeof(float) == 4, "f32 requires a 32-bit float");
 
-typedef enum toy_dtype {
+typedef enum dtype {
     TOY_DTYPE_INVALID = 0,
     TOY_DTYPE_F32 = 1,
     TOY_DTYPE_Q8_0 = 2,
     TOY_DTYPE_F16 = 3,
     TOY_DTYPE_BF16 = 4,
     TOY_DTYPE_I8 = 5,
-} toy_dtype;
+} dtype;
 
 static_assert(TOY_DTYPE_INVALID == 0, "dtype 0 is invalid");
 static_assert(TOY_DTYPE_F32 == 1 && TOY_DTYPE_Q8_0 == 2 && TOY_DTYPE_F16 == 3
     && TOY_DTYPE_BF16 == 4 && TOY_DTYPE_I8 == 5,
-    "dtype values match the toy_spec ABI");
+    "dtype values match the spec ABI");
 
-typedef enum toy_layout {
+typedef enum layout {
     TOY_LAYOUT_INVALID = 0,
     TOY_LAYOUT_ROW_MAJOR = 1,
-} toy_layout;
+} layout;
 
-typedef enum toy_tensor_flags {
+typedef enum tensor_flags {
     TOY_TENSOR_FLAG_OWNS_DATA = 0b01u,
     TOY_TENSOR_FLAG_ALIAS = 0b10u,
-} toy_tensor_flags;
+} tensor_flags;
 
-typedef enum toy_status {
+typedef enum tensor_status {
     TOY_OK = 0,
     TOY_ERROR_DTYPE,
     TOY_ERROR_SHAPE,
     TOY_ERROR_BYTES,
     TOY_ERROR_OVERFLOW,
     TOY_ERROR_MEMORY,
-} toy_status;
+} tensor_status;
 
-typedef struct toy_buffer {
+typedef struct buffer {
     uint32_t refcount;
     size_t bytes;
     void *data;
-} toy_buffer;
+} buffer;
 
-typedef void (*toy_kernel_entry)(const void *a, const void *b, void *c);
+typedef void (*kernel_entry)(const void *a, const void *b, void *c);
 
 /*
  * Element-wise kernel memo
@@ -79,13 +79,13 @@ typedef void (*toy_kernel_entry)(const void *a, const void *b, void *c);
  * reshape, which preserves the element count, and a cast allocates a new
  * tensor with an empty memo
  */
-typedef struct toy_tensor_memo {
-    toy_kernel_entry kernel;
+typedef struct tensor_memo {
+    kernel_entry kernel;
     uint64_t key;
     uint32_t param_bits;
-} toy_tensor_memo;
+} tensor_memo;
 
-typedef struct toy_tensor {
+typedef struct tensor {
     uint32_t refcount;
     uint8_t dtype;
     uint8_t rank;
@@ -94,54 +94,54 @@ typedef struct toy_tensor {
     uint32_t dims[TOY_TENSOR_MAX_DIMS];
     size_t bytes;
     void *data;
-    toy_buffer *buffer;
-    toy_tensor_memo memo;
-} toy_tensor;
+    buffer *buffer;
+    tensor_memo memo;
+} tensor;
 
 /* Returns NULL for an unknown dtype */
-const char *toy_dtype_name(toy_dtype dtype);
+const char *dtype_to_name(dtype dtype_value);
 
-[[nodiscard]] bool toy_dtype_from_name(const char *name, size_t length, toy_dtype *dtype);
+[[nodiscard]] bool dtype_from_name(const char *name, size_t length, dtype *out_dtype);
 
 /* Computes the byte count of a shape; q8_0 needs a last dim divisible by 32 */
-[[nodiscard]] toy_status toy_tensor_shape_bytes(toy_dtype dtype, uint8_t rank,
-                                                const uint32_t *dims, size_t *bytes);
+[[nodiscard]] tensor_status tensor_shape_bytes(dtype dtype_value, uint8_t rank,
+                                               const uint32_t *dims, size_t *bytes);
 
 /* Allocates a zero-filled tensor with its own 64-byte aligned buffer */
-[[nodiscard]] toy_tensor *toy_tensor_alloc(toy_dtype dtype, uint8_t rank,
-                                           const uint32_t *dims, toy_status *status);
+[[nodiscard]] tensor *tensor_alloc(dtype dtype_value, uint8_t rank,
+                                   const uint32_t *dims, tensor_status *status);
 
 /* Wraps external memory; the tensor does not own the memory. This is the only
  * exported C function */
-[[nodiscard]] TOY_API toy_tensor *toy_tensor_alias(void *data, size_t bytes, toy_dtype dtype,
-                                                   uint8_t rank,
-                                                   const uint32_t dims[TOY_TENSOR_MAX_DIMS]);
+[[nodiscard]] TOY_API tensor *toy_tensor_alias(void *data, size_t bytes,
+                                               dtype dtype_value, uint8_t rank,
+                                               const uint32_t dims[TOY_TENSOR_MAX_DIMS]);
 
-toy_tensor *toy_tensor_retain(toy_tensor *tensor);
-void toy_tensor_release(toy_tensor *tensor);
+tensor *tensor_retain(tensor *self);
+void tensor_release(tensor *self);
 
 /* Reshapes in place; the byte count must not change */
-[[nodiscard]] toy_status toy_tensor_reshape(toy_tensor *tensor, uint8_t rank,
-                                            const uint32_t *dims);
+[[nodiscard]] tensor_status tensor_reshape(tensor *self, uint8_t rank,
+                                           const uint32_t *dims);
 
 /* Copies into a newly allocated tensor */
-[[nodiscard]] toy_tensor *toy_tensor_clone(const toy_tensor *tensor, toy_status *status);
+[[nodiscard]] tensor *tensor_clone(const tensor *self, tensor_status *status);
 
 /* Fills every element with one scalar; f32 and q8_0 only */
-[[nodiscard]] toy_status toy_tensor_fill(toy_tensor *tensor, float value);
+[[nodiscard]] tensor_status tensor_fill(tensor *self, float value);
 
 /*
  * Converts into a newly allocated tensor of another dtype; f32 and q8_0 only
  * Same-dtype conversion copies the bytes
  */
-[[nodiscard]] toy_tensor *toy_tensor_cast(const toy_tensor *tensor, toy_dtype dtype,
-                                          toy_status *status);
+[[nodiscard]] tensor *tensor_cast(const tensor *self, dtype dtype_value,
+                                  tensor_status *status);
 
-size_t toy_tensor_numel(const toy_tensor *tensor);
+size_t tensor_numel(const tensor *self);
 
-static inline void *toy_tensor_data(const toy_tensor *tensor)
+static inline void *tensor_data(const tensor *self)
 {
-    return tensor->data;
+    return self->data;
 }
 
-#endif /* TOY_TENSOR_H */
+#endif /* TENSOR_H */

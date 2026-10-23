@@ -24,27 +24,27 @@ enum {
     TOY_WIN64_STACK_BYTES = 160,
 };
 
-static void emit_win64_prologue(struct toy_asm *as) {
-    toy_asm_push_r64(as, TOY_RDI);
-    toy_asm_push_r64(as, TOY_RSI);
-    toy_asm_sub_imm(as, TOY_RSP, TOY_WIN64_STACK_BYTES);
+static void emit_win64_prologue(struct assembler *as) {
+    asm_push_r64(as, TOY_RDI);
+    asm_push_r64(as, TOY_RSI);
+    asm_sub_imm(as, TOY_RSP, TOY_WIN64_STACK_BYTES);
     for (uint8_t r = TOY_WIN64_XMM_FIRST; r <= TOY_WIN64_XMM_LAST; r++) {
         const int32_t offset = (int32_t)((r - TOY_WIN64_XMM_FIRST) * 16);
-        toy_asm_vmovups_store_xmm(as, toy_mem_base(TOY_RSP, offset), r);
+        asm_vmovups_store_xmm(as, mem_base(TOY_RSP, offset), r);
     }
-    toy_asm_mov_rr(as, TOY_RDI, TOY_RCX);
-    toy_asm_mov_rr(as, TOY_RSI, TOY_RDX);
-    toy_asm_mov_rr(as, TOY_RDX, TOY_R8);
+    asm_mov_rr(as, TOY_RDI, TOY_RCX);
+    asm_mov_rr(as, TOY_RSI, TOY_RDX);
+    asm_mov_rr(as, TOY_RDX, TOY_R8);
 }
 
-static void emit_win64_epilogue(struct toy_asm *as) {
+static void emit_win64_epilogue(struct assembler *as) {
     for (uint8_t r = TOY_WIN64_XMM_FIRST; r <= TOY_WIN64_XMM_LAST; r++) {
         const int32_t offset = (int32_t)((r - TOY_WIN64_XMM_FIRST) * 16);
-        toy_asm_vmovups_load_xmm(as, r, toy_mem_base(TOY_RSP, offset));
+        asm_vmovups_load_xmm(as, r, mem_base(TOY_RSP, offset));
     }
-    toy_asm_add_imm(as, TOY_RSP, TOY_WIN64_STACK_BYTES);
-    toy_asm_pop_r64(as, TOY_RSI);
-    toy_asm_pop_r64(as, TOY_RDI);
+    asm_add_imm(as, TOY_RSP, TOY_WIN64_STACK_BYTES);
+    asm_pop_r64(as, TOY_RSI);
+    asm_pop_r64(as, TOY_RDI);
 }
 #endif
 
@@ -62,13 +62,13 @@ enum {
     DOT_P = 0,
 };
 
-static void emit_reduce_ymm_to_xmm(struct toy_asm *as, uint8_t ymm) {
-    toy_asm_vextractf128(as, TOY_XMM9, ymm, 1);
-    toy_asm_vaddps(as, false, ymm, ymm, TOY_XMM9);
-    toy_asm_vshufps(as, TOY_XMM9, ymm, ymm, 0x4E);
-    toy_asm_vaddps(as, false, ymm, ymm, TOY_XMM9);
-    toy_asm_vshufps(as, TOY_XMM9, ymm, ymm, 0xB1);
-    toy_asm_vaddps(as, false, ymm, ymm, TOY_XMM9);
+static void emit_reduce_ymm_to_xmm(struct assembler *as, uint8_t ymm) {
+    asm_vextractf128(as, TOY_XMM9, ymm, 1);
+    asm_vaddps(as, false, ymm, ymm, TOY_XMM9);
+    asm_vshufps(as, TOY_XMM9, ymm, ymm, 0x4E);
+    asm_vaddps(as, false, ymm, ymm, TOY_XMM9);
+    asm_vshufps(as, TOY_XMM9, ymm, ymm, 0xB1);
+    asm_vaddps(as, false, ymm, ymm, TOY_XMM9);
 }
 
 /*
@@ -78,7 +78,7 @@ static void emit_reduce_ymm_to_xmm(struct toy_asm *as, uint8_t ymm) {
  * The order inside a row is the same as the elementwise code, but 8 separate
  * FMA chains hide the latency
  */
-static void emit_scalar_block8(struct toy_asm *as, uint32_t blocks, uint32_t cols, uint32_t k,
+static void emit_scalar_block8(struct assembler *as, uint32_t blocks, uint32_t cols, uint32_t k,
                                uint32_t bStride, uint32_t cStride,
                                uint8_t labelI, uint8_t labelJ, uint8_t labelP) {
     if (blocks == 0 || cols == 0) {
@@ -88,45 +88,45 @@ static void emit_scalar_block8(struct toy_asm *as, uint32_t blocks, uint32_t col
     const int32_t aBlockBytes = (int32_t)(8 * k * 4);
     const int32_t cBlockBytes = (int32_t)(8 * cStride * 4);
 
-    toy_asm_mov_rr(as, TOY_R8, TOY_RDI);
-    toy_asm_mov_rr(as, TOY_R9, TOY_RDX);
-    toy_asm_xor_rr(as, TOY_RAX, TOY_RAX);
-    toy_asm_label(as, labelI);
-    toy_asm_xor_rr(as, TOY_RCX, TOY_RCX);
-    toy_asm_label(as, labelJ);
+    asm_mov_rr(as, TOY_R8, TOY_RDI);
+    asm_mov_rr(as, TOY_R9, TOY_RDX);
+    asm_xor_rr(as, TOY_RAX, TOY_RAX);
+    asm_label(as, labelI);
+    asm_xor_rr(as, TOY_RCX, TOY_RCX);
+    asm_label(as, labelJ);
     for (uint8_t r = 0; r < 8; r++) {
-        toy_asm_vxorps(as, false, r, r, r);
+        asm_vxorps(as, false, r, r, r);
     }
-    toy_asm_lea(as, TOY_R10, toy_mem_index(TOY_RSI, TOY_RCX, 4, 0));
-    toy_asm_xor_rr(as, TOY_R11, TOY_R11);
+    asm_lea(as, TOY_R10, mem_index(TOY_RSI, TOY_RCX, 4, 0));
+    asm_xor_rr(as, TOY_R11, TOY_R11);
     if (k > 1) {
-        toy_asm_label(as, labelP);
+        asm_label(as, labelP);
     }
-    toy_asm_vmovss_load(as, TOY_XMM8, toy_mem_base(TOY_R10, 0));
+    asm_vmovss_load(as, TOY_XMM8, mem_base(TOY_R10, 0));
     for (uint8_t r = 0; r < 8; r++) {
-        toy_asm_vfmadd231ss_mem(as, r, TOY_XMM8,
-                                toy_mem_index(TOY_R8, TOY_R11, 4, (int32_t)(r * k * 4)));
+        asm_vfmadd231ss_mem(as, r, TOY_XMM8,
+                                mem_index(TOY_R8, TOY_R11, 4, (int32_t)(r * k * 4)));
     }
     if (k > 1) {
-        toy_asm_add_imm(as, TOY_R10, bStep);
-        toy_asm_add_imm(as, TOY_R11, 1);
-        toy_asm_cmp_imm(as, TOY_R11, (int32_t)k);
-        toy_asm_jcc(as, TOY_CC_NE, labelP);
+        asm_add_imm(as, TOY_R10, bStep);
+        asm_add_imm(as, TOY_R11, 1);
+        asm_cmp_imm(as, TOY_R11, (int32_t)k);
+        asm_jcc(as, TOY_CC_NE, labelP);
     }
     for (uint8_t r = 0; r < 8; r++) {
-        toy_asm_vmovss_store(as, toy_mem_index(TOY_R9, TOY_RCX, 4, (int32_t)(r * cStride * 4)), r);
+        asm_vmovss_store(as, mem_index(TOY_R9, TOY_RCX, 4, (int32_t)(r * cStride * 4)), r);
     }
     if (cols > 1) {
-        toy_asm_add_imm(as, TOY_RCX, 1);
-        toy_asm_cmp_imm(as, TOY_RCX, (int32_t)cols);
-        toy_asm_jcc(as, TOY_CC_NE, labelJ);
+        asm_add_imm(as, TOY_RCX, 1);
+        asm_cmp_imm(as, TOY_RCX, (int32_t)cols);
+        asm_jcc(as, TOY_CC_NE, labelJ);
     }
     if (blocks > 1) {
-        toy_asm_add_imm(as, TOY_R8, aBlockBytes);
-        toy_asm_add_imm(as, TOY_R9, cBlockBytes);
-        toy_asm_add_imm(as, TOY_RAX, 1);
-        toy_asm_cmp_imm(as, TOY_RAX, (int32_t)blocks);
-        toy_asm_jcc(as, TOY_CC_NE, labelI);
+        asm_add_imm(as, TOY_R8, aBlockBytes);
+        asm_add_imm(as, TOY_R9, cBlockBytes);
+        asm_add_imm(as, TOY_RAX, 1);
+        asm_cmp_imm(as, TOY_RAX, (int32_t)blocks);
+        asm_jcc(as, TOY_CC_NE, labelI);
     }
 }
 
@@ -139,7 +139,7 @@ static void emit_scalar_block8(struct toy_asm *as, uint32_t blocks, uint32_t col
  * bStride is the row stride of B along k, cStride is the row stride of C
  * All counts are generation-time constants, the loop bounds are immediates
  */
-static void emit_scalar_region(struct toy_asm *as, uint32_t rows, uint32_t cols, uint32_t k,
+static void emit_scalar_region(struct assembler *as, uint32_t rows, uint32_t cols, uint32_t k,
                                uint32_t startRow, uint32_t startCol,
                                uint32_t bStride, uint32_t cStride,
                                uint8_t labelI, uint8_t labelJ, uint8_t labelP) {
@@ -153,47 +153,47 @@ static void emit_scalar_region(struct toy_asm *as, uint32_t rows, uint32_t cols,
     const int32_t cStep = (int32_t)((cStride - cols) * 4);
 
     // r8 = a + startRow * k
-    toy_asm_mov_imm32(as, TOY_RAX, startRow);
-    toy_asm_imul_imm(as, TOY_RAX, TOY_RAX, aRowBytes);
-    toy_asm_lea(as, TOY_R8, toy_mem_index(TOY_RDI, TOY_RAX, 1, 0));
+    asm_mov_imm32(as, TOY_RAX, startRow);
+    asm_imul_imm(as, TOY_RAX, TOY_RAX, aRowBytes);
+    asm_lea(as, TOY_R8, mem_index(TOY_RDI, TOY_RAX, 1, 0));
     // r10 = c + startRow * cStride + startCol
-    toy_asm_mov_imm32(as, TOY_RAX, startRow);
-    toy_asm_imul_imm(as, TOY_RAX, TOY_RAX, cRowBytes);
-    toy_asm_lea(as, TOY_R10, toy_mem_index(TOY_RDX, TOY_RAX, 1, (int32_t)(startCol * 4)));
+    asm_mov_imm32(as, TOY_RAX, startRow);
+    asm_imul_imm(as, TOY_RAX, TOY_RAX, cRowBytes);
+    asm_lea(as, TOY_R10, mem_index(TOY_RDX, TOY_RAX, 1, (int32_t)(startCol * 4)));
 
-    toy_asm_xor_rr(as, TOY_RAX, TOY_RAX);
-    toy_asm_label(as, labelI);
-    toy_asm_xor_rr(as, TOY_RCX, TOY_RCX);
-    toy_asm_label(as, labelJ);
-    toy_asm_lea(as, TOY_R9, toy_mem_index(TOY_RSI, TOY_RCX, 4, (int32_t)(startCol * 4)));
-    toy_asm_vxorps(as, false, TOY_XMM0, TOY_XMM0, TOY_XMM0);
-    toy_asm_xor_rr(as, TOY_R11, TOY_R11);
+    asm_xor_rr(as, TOY_RAX, TOY_RAX);
+    asm_label(as, labelI);
+    asm_xor_rr(as, TOY_RCX, TOY_RCX);
+    asm_label(as, labelJ);
+    asm_lea(as, TOY_R9, mem_index(TOY_RSI, TOY_RCX, 4, (int32_t)(startCol * 4)));
+    asm_vxorps(as, false, TOY_XMM0, TOY_XMM0, TOY_XMM0);
+    asm_xor_rr(as, TOY_R11, TOY_R11);
     if (k > 1) {
-        toy_asm_label(as, labelP);
+        asm_label(as, labelP);
     }
-    toy_asm_vmovss_load(as, TOY_XMM1, toy_mem_index(TOY_R8, TOY_R11, 4, 0));
-    toy_asm_vfmadd231ss_mem(as, TOY_XMM0, TOY_XMM1, toy_mem_base(TOY_R9, 0));
+    asm_vmovss_load(as, TOY_XMM1, mem_index(TOY_R8, TOY_R11, 4, 0));
+    asm_vfmadd231ss_mem(as, TOY_XMM0, TOY_XMM1, mem_base(TOY_R9, 0));
     if (k > 1) {
-        toy_asm_add_imm(as, TOY_R9, bStep);
-        toy_asm_add_imm(as, TOY_R11, 1);
-        toy_asm_cmp_imm(as, TOY_R11, (int32_t)k);
-        toy_asm_jcc(as, TOY_CC_NE, labelP);
+        asm_add_imm(as, TOY_R9, bStep);
+        asm_add_imm(as, TOY_R11, 1);
+        asm_cmp_imm(as, TOY_R11, (int32_t)k);
+        asm_jcc(as, TOY_CC_NE, labelP);
     }
-    toy_asm_vmovss_store(as, toy_mem_base(TOY_R10, 0), TOY_XMM0);
-    toy_asm_add_imm(as, TOY_R10, 4);
+    asm_vmovss_store(as, mem_base(TOY_R10, 0), TOY_XMM0);
+    asm_add_imm(as, TOY_R10, 4);
     if (cols > 1) {
-        toy_asm_add_imm(as, TOY_RCX, 1);
-        toy_asm_cmp_imm(as, TOY_RCX, (int32_t)cols);
-        toy_asm_jcc(as, TOY_CC_NE, labelJ);
+        asm_add_imm(as, TOY_RCX, 1);
+        asm_cmp_imm(as, TOY_RCX, (int32_t)cols);
+        asm_jcc(as, TOY_CC_NE, labelJ);
     }
     if (rows > 1) {
-        toy_asm_add_imm(as, TOY_R8, aRowBytes);
+        asm_add_imm(as, TOY_R8, aRowBytes);
         if (cStep != 0) {
-            toy_asm_add_imm(as, TOY_R10, cStep);
+            asm_add_imm(as, TOY_R10, cStep);
         }
-        toy_asm_add_imm(as, TOY_RAX, 1);
-        toy_asm_cmp_imm(as, TOY_RAX, (int32_t)rows);
-        toy_asm_jcc(as, TOY_CC_NE, labelI);
+        asm_add_imm(as, TOY_RAX, 1);
+        asm_cmp_imm(as, TOY_RAX, (int32_t)rows);
+        asm_jcc(as, TOY_CC_NE, labelI);
     }
 }
 
@@ -207,7 +207,7 @@ static void emit_scalar_region(struct toy_asm *as, uint32_t rows, uint32_t cols,
  * The row tail and the column tail are known shapes, the scalar region handles
  * them
  */
-static void emit_avx2_gemm(struct toy_asm *as, uint32_t m, uint32_t n, uint32_t k) {
+static void emit_avx2_gemm(struct assembler *as, uint32_t m, uint32_t n, uint32_t k) {
     const uint32_t n4 = n & ~3u;
     const uint32_t m8 = m & ~7u;
 
@@ -218,60 +218,60 @@ static void emit_avx2_gemm(struct toy_asm *as, uint32_t m, uint32_t n, uint32_t 
 
         // i is the outer loop: the A panel of 8 rows (8 x k) stays in L2 and serves all j blocks
         // j is the inner loop, B streams through in column blocks
-        toy_asm_mov_rr(as, TOY_R8, TOY_RDI);
-        toy_asm_mov_rr(as, TOY_R9, TOY_RDX);
-        toy_asm_xor_rr(as, TOY_R11, TOY_R11);
-        toy_asm_label(as, LABEL_I);
-        toy_asm_xor_rr(as, TOY_RCX, TOY_RCX);
-        toy_asm_label(as, LABEL_J);
+        asm_mov_rr(as, TOY_R8, TOY_RDI);
+        asm_mov_rr(as, TOY_R9, TOY_RDX);
+        asm_xor_rr(as, TOY_R11, TOY_R11);
+        asm_label(as, LABEL_I);
+        asm_xor_rr(as, TOY_RCX, TOY_RCX);
+        asm_label(as, LABEL_J);
         for (uint8_t r = 0; r < 8; r++) {
-            toy_asm_vxorps(as, true, r, r, r);
+            asm_vxorps(as, true, r, r, r);
         }
         // r10 = j + p * n, in elements
-        toy_asm_mov_rr(as, TOY_R10, TOY_RCX);
-        toy_asm_xor_rr(as, TOY_RAX, TOY_RAX);
+        asm_mov_rr(as, TOY_R10, TOY_RCX);
+        asm_xor_rr(as, TOY_RAX, TOY_RAX);
         if (k4 != 0) {
-            toy_asm_label(as, LABEL_P);
+            asm_label(as, LABEL_P);
             for (uint8_t q = 0; q < 4; q++) {
-                toy_asm_vmovups_load_xmm(as, (uint8_t)(TOY_XMM8 + q),
-                                         toy_mem_index(TOY_RSI, TOY_R10, 4, (int32_t)(q * n * 4)));
+                asm_vmovups_load_xmm(as, (uint8_t)(TOY_XMM8 + q),
+                                         mem_index(TOY_RSI, TOY_R10, 4, (int32_t)(q * n * 4)));
             }
             // q is the outer loop, so 7 independent instructions separate two FMAs on one accumulator
             for (uint8_t q = 0; q < 4; q++) {
                 for (uint8_t r = 0; r < 8; r++) {
-                    toy_asm_vbroadcastss(as, TOY_YMM12,
-                                         toy_mem_index(TOY_R8, TOY_RAX, 4, (int32_t)(r * k * 4 + q * 4)));
-                    toy_asm_vfmadd231ps(as, r, TOY_YMM12, (uint8_t)(TOY_YMM8 + q));
+                    asm_vbroadcastss(as, TOY_YMM12,
+                                         mem_index(TOY_R8, TOY_RAX, 4, (int32_t)(r * k * 4 + q * 4)));
+                    asm_vfmadd231ps(as, r, TOY_YMM12, (uint8_t)(TOY_YMM8 + q));
                 }
             }
-            toy_asm_add_imm(as, TOY_RAX, 4);
-            toy_asm_add_imm(as, TOY_R10, (int32_t)(4 * n));
-            toy_asm_cmp_imm(as, TOY_RAX, (int32_t)k4);
-            toy_asm_jcc(as, TOY_CC_NE, LABEL_P);
+            asm_add_imm(as, TOY_RAX, 4);
+            asm_add_imm(as, TOY_R10, (int32_t)(4 * n));
+            asm_cmp_imm(as, TOY_RAX, (int32_t)k4);
+            asm_jcc(as, TOY_CC_NE, LABEL_P);
         }
         for (uint32_t q = 0; q < kt; q++) {
-            toy_asm_vmovups_load_xmm(as, TOY_XMM8,
-                                     toy_mem_index(TOY_RSI, TOY_R10, 4, (int32_t)(q * n * 4)));
+            asm_vmovups_load_xmm(as, TOY_XMM8,
+                                     mem_index(TOY_RSI, TOY_R10, 4, (int32_t)(q * n * 4)));
             for (uint8_t r = 0; r < 8; r++) {
-                toy_asm_vbroadcastss(as, TOY_YMM12,
-                                     toy_mem_index(TOY_R8, TOY_RAX, 4, (int32_t)(r * k * 4 + q * 4)));
-                toy_asm_vfmadd231ps(as, r, TOY_YMM12, TOY_YMM8);
+                asm_vbroadcastss(as, TOY_YMM12,
+                                     mem_index(TOY_R8, TOY_RAX, 4, (int32_t)(r * k * 4 + q * 4)));
+                asm_vfmadd231ps(as, r, TOY_YMM12, TOY_YMM8);
             }
         }
         for (uint8_t r = 0; r < 8; r++) {
-            toy_asm_vmovups_store_xmm(as, toy_mem_index(TOY_R9, TOY_RCX, 4, (int32_t)(r * n * 4)), r);
+            asm_vmovups_store_xmm(as, mem_index(TOY_R9, TOY_RCX, 4, (int32_t)(r * n * 4)), r);
         }
         if (n4 > 4) {
-            toy_asm_add_imm(as, TOY_RCX, 4);
-            toy_asm_cmp_imm(as, TOY_RCX, (int32_t)n4);
-            toy_asm_jcc(as, TOY_CC_NE, LABEL_J);
+            asm_add_imm(as, TOY_RCX, 4);
+            asm_cmp_imm(as, TOY_RCX, (int32_t)n4);
+            asm_jcc(as, TOY_CC_NE, LABEL_J);
         }
         if (blocks > 1) {
-            toy_asm_add_imm(as, TOY_R8, (int32_t)(8 * k * 4));
-            toy_asm_add_imm(as, TOY_R9, (int32_t)(8 * n * 4));
-            toy_asm_add_imm(as, TOY_R11, 1);
-            toy_asm_cmp_imm(as, TOY_R11, (int32_t)blocks);
-            toy_asm_jcc(as, TOY_CC_NE, LABEL_I);
+            asm_add_imm(as, TOY_R8, (int32_t)(8 * k * 4));
+            asm_add_imm(as, TOY_R9, (int32_t)(8 * n * 4));
+            asm_add_imm(as, TOY_R11, 1);
+            asm_cmp_imm(as, TOY_R11, (int32_t)blocks);
+            asm_jcc(as, TOY_CC_NE, LABEL_I);
         }
     }
 
@@ -286,47 +286,47 @@ static void emit_avx2_gemm(struct toy_asm *as, uint32_t m, uint32_t n, uint32_t 
  * A lane holds a subsequence of k with step 8, a horizontal sum at the end
  * handles the k tail
  */
-static void emit_avx2_matvec(struct toy_asm *as, uint32_t m, uint32_t k) {
+static void emit_avx2_matvec(struct assembler *as, uint32_t m, uint32_t k) {
     const uint32_t m8 = m & ~7u;
     const uint32_t k8 = k & ~7u;
     const uint32_t kt = k & 7u;
 
     if (m8 != 0) {
         const uint32_t blocks = m8 / 8;
-        toy_asm_mov_rr(as, TOY_R8, TOY_RDI);
-        toy_asm_mov_rr(as, TOY_R9, TOY_RDX);
-        toy_asm_xor_rr(as, TOY_R10, TOY_R10);
-        toy_asm_label(as, LABEL_I);
+        asm_mov_rr(as, TOY_R8, TOY_RDI);
+        asm_mov_rr(as, TOY_R9, TOY_RDX);
+        asm_xor_rr(as, TOY_R10, TOY_R10);
+        asm_label(as, LABEL_I);
         for (uint8_t r = 0; r < 8; r++) {
-            toy_asm_vxorps(as, true, r, r, r);
+            asm_vxorps(as, true, r, r, r);
         }
-        toy_asm_xor_rr(as, TOY_RAX, TOY_RAX);
+        asm_xor_rr(as, TOY_RAX, TOY_RAX);
         if (k8 != 0) {
-            toy_asm_label(as, MATVEC_P);
-            toy_asm_vmovups_load_ymm(as, TOY_YMM8, toy_mem_index(TOY_RSI, TOY_RAX, 4, 0));
+            asm_label(as, MATVEC_P);
+            asm_vmovups_load_ymm(as, TOY_YMM8, mem_index(TOY_RSI, TOY_RAX, 4, 0));
             for (uint8_t r = 0; r < 8; r++) {
-                toy_asm_vfmadd231ps_mem(as, r, TOY_YMM8,
-                                        toy_mem_index(TOY_R8, TOY_RAX, 4, (int32_t)(r * k * 4)));
+                asm_vfmadd231ps_mem(as, r, TOY_YMM8,
+                                        mem_index(TOY_R8, TOY_RAX, 4, (int32_t)(r * k * 4)));
             }
-            toy_asm_add_imm(as, TOY_RAX, 8);
-            toy_asm_cmp_imm(as, TOY_RAX, (int32_t)k8);
-            toy_asm_jcc(as, TOY_CC_NE, MATVEC_P);
+            asm_add_imm(as, TOY_RAX, 8);
+            asm_cmp_imm(as, TOY_RAX, (int32_t)k8);
+            asm_jcc(as, TOY_CC_NE, MATVEC_P);
         }
         for (uint8_t r = 0; r < 8; r++) {
             emit_reduce_ymm_to_xmm(as, r);
             for (uint32_t q = 0; q < kt; q++) {
-                toy_asm_vmovss_load(as, TOY_XMM9, toy_mem_base(TOY_RSI, (int32_t)((k8 + q) * 4)));
-                toy_asm_vfmadd231ss_mem(as, r, TOY_XMM9,
-                                        toy_mem_base(TOY_R8, (int32_t)(r * k * 4 + (k8 + q) * 4)));
+                asm_vmovss_load(as, TOY_XMM9, mem_base(TOY_RSI, (int32_t)((k8 + q) * 4)));
+                asm_vfmadd231ss_mem(as, r, TOY_XMM9,
+                                        mem_base(TOY_R8, (int32_t)(r * k * 4 + (k8 + q) * 4)));
             }
-            toy_asm_vmovss_store(as, toy_mem_base(TOY_R9, (int32_t)(r * 4)), r);
+            asm_vmovss_store(as, mem_base(TOY_R9, (int32_t)(r * 4)), r);
         }
         if (blocks > 1) {
-            toy_asm_add_imm(as, TOY_R8, (int32_t)(8 * k * 4));
-            toy_asm_add_imm(as, TOY_R9, 8 * 4);
-            toy_asm_add_imm(as, TOY_R10, 1);
-            toy_asm_cmp_imm(as, TOY_R10, (int32_t)blocks);
-            toy_asm_jcc(as, TOY_CC_NE, LABEL_I);
+            asm_add_imm(as, TOY_R8, (int32_t)(8 * k * 4));
+            asm_add_imm(as, TOY_R9, 8 * 4);
+            asm_add_imm(as, TOY_R10, 1);
+            asm_cmp_imm(as, TOY_R10, (int32_t)blocks);
+            asm_jcc(as, TOY_CC_NE, LABEL_I);
         }
     }
 
@@ -334,33 +334,33 @@ static void emit_avx2_matvec(struct toy_asm *as, uint32_t m, uint32_t k) {
 }
 
 // AVX2 dot: one ymm accumulator, 8 steps along k, horizontal sum at the end
-static void emit_avx2_dot(struct toy_asm *as, uint32_t k) {
+static void emit_avx2_dot(struct assembler *as, uint32_t k) {
     const uint32_t k8 = k & ~7u;
     const uint32_t kt = k & 7u;
 
-    toy_asm_vxorps(as, true, TOY_YMM0, TOY_YMM0, TOY_YMM0);
-    toy_asm_xor_rr(as, TOY_RAX, TOY_RAX);
+    asm_vxorps(as, true, TOY_YMM0, TOY_YMM0, TOY_YMM0);
+    asm_xor_rr(as, TOY_RAX, TOY_RAX);
     if (k8 != 0) {
-        toy_asm_label(as, DOT_P);
-        toy_asm_vmovups_load_ymm(as, TOY_YMM8, toy_mem_index(TOY_RDI, TOY_RAX, 4, 0));
-        toy_asm_vfmadd231ps_mem(as, TOY_YMM0, TOY_YMM8, toy_mem_index(TOY_RSI, TOY_RAX, 4, 0));
-        toy_asm_add_imm(as, TOY_RAX, 8);
-        toy_asm_cmp_imm(as, TOY_RAX, (int32_t)k8);
-        toy_asm_jcc(as, TOY_CC_NE, DOT_P);
+        asm_label(as, DOT_P);
+        asm_vmovups_load_ymm(as, TOY_YMM8, mem_index(TOY_RDI, TOY_RAX, 4, 0));
+        asm_vfmadd231ps_mem(as, TOY_YMM0, TOY_YMM8, mem_index(TOY_RSI, TOY_RAX, 4, 0));
+        asm_add_imm(as, TOY_RAX, 8);
+        asm_cmp_imm(as, TOY_RAX, (int32_t)k8);
+        asm_jcc(as, TOY_CC_NE, DOT_P);
     }
     emit_reduce_ymm_to_xmm(as, TOY_XMM0);
     for (uint32_t q = 0; q < kt; q++) {
-        toy_asm_vmovss_load(as, TOY_XMM1, toy_mem_base(TOY_RDI, (int32_t)((k8 + q) * 4)));
-        toy_asm_vfmadd231ss_mem(as, TOY_XMM0, TOY_XMM1,
-                                toy_mem_base(TOY_RSI, (int32_t)((k8 + q) * 4)));
+        asm_vmovss_load(as, TOY_XMM1, mem_base(TOY_RDI, (int32_t)((k8 + q) * 4)));
+        asm_vfmadd231ss_mem(as, TOY_XMM0, TOY_XMM1,
+                                mem_base(TOY_RSI, (int32_t)((k8 + q) * 4)));
     }
-    toy_asm_vmovss_store(as, toy_mem_base(TOY_RDX, 0), TOY_XMM0);
+    asm_vmovss_store(as, mem_base(TOY_RDX, 0), TOY_XMM0);
 }
 
 // Writes a generation-time constant into the low lane of xmm
-static void emit_const_xmm(struct toy_asm *as, uint8_t xmm, uint32_t bits) {
-    toy_asm_mov_imm32(as, TOY_RAX, bits);
-    toy_asm_vmovd_gpr(as, xmm, TOY_RAX);
+static void emit_const_xmm(struct assembler *as, uint8_t xmm, uint32_t bits) {
+    asm_mov_imm32(as, TOY_RAX, bits);
+    asm_vmovd_gpr(as, xmm, TOY_RAX);
 }
 
 static uint32_t float_bits(float value) {
@@ -376,7 +376,7 @@ static uint32_t float_bits(float value) {
  * wide selects 8 lanes of AVX2, otherwise the code works on one element. The
  * tail count is a generation-time constant
  */
-static void emit_element_binary(struct toy_asm *as, uint32_t op, uint32_t count, bool wide,
+static void emit_element_binary(struct assembler *as, uint32_t op, uint32_t count, bool wide,
                                 uint32_t param_bits) {
     if (count == 0) {
         return;
@@ -389,56 +389,56 @@ static void emit_element_binary(struct toy_asm *as, uint32_t op, uint32_t count,
         // Broadcast the factor into xmm7 or ymm7
         emit_const_xmm(as, TOY_XMM7, param_bits);
         if (wide) {
-            toy_asm_vshufps(as, TOY_XMM7, TOY_XMM7, TOY_XMM7, 0x00);
-            toy_asm_vinsertf128(as, TOY_YMM7, TOY_YMM7, TOY_XMM7, 1);
+            asm_vshufps(as, TOY_XMM7, TOY_XMM7, TOY_XMM7, 0x00);
+            asm_vinsertf128(as, TOY_YMM7, TOY_YMM7, TOY_XMM7, 1);
         }
     }
 
-    toy_asm_xor_rr(as, TOY_RAX, TOY_RAX);
+    asm_xor_rr(as, TOY_RAX, TOY_RAX);
     if (main != 0) {
-        toy_asm_label(as, 0);
+        asm_label(as, 0);
         if (scale) {
             if (wide) {
-                toy_asm_vmovups_load_ymm(as, TOY_YMM0, toy_mem_index(TOY_RDI, TOY_RAX, 4, 0));
-                toy_asm_vmulps(as, true, TOY_YMM0, TOY_YMM0, TOY_YMM7);
-                toy_asm_vmovups_store_ymm(as, toy_mem_index(TOY_RDX, TOY_RAX, 4, 0), TOY_YMM0);
+                asm_vmovups_load_ymm(as, TOY_YMM0, mem_index(TOY_RDI, TOY_RAX, 4, 0));
+                asm_vmulps(as, true, TOY_YMM0, TOY_YMM0, TOY_YMM7);
+                asm_vmovups_store_ymm(as, mem_index(TOY_RDX, TOY_RAX, 4, 0), TOY_YMM0);
             } else {
-                toy_asm_vmovss_load(as, TOY_XMM0, toy_mem_index(TOY_RDI, TOY_RAX, 4, 0));
-                toy_asm_vmulps(as, false, TOY_XMM0, TOY_XMM0, TOY_XMM7);
-                toy_asm_vmovss_store(as, toy_mem_index(TOY_RDX, TOY_RAX, 4, 0), TOY_XMM0);
+                asm_vmovss_load(as, TOY_XMM0, mem_index(TOY_RDI, TOY_RAX, 4, 0));
+                asm_vmulps(as, false, TOY_XMM0, TOY_XMM0, TOY_XMM7);
+                asm_vmovss_store(as, mem_index(TOY_RDX, TOY_RAX, 4, 0), TOY_XMM0);
             }
         } else {
             if (wide) {
-                toy_asm_vmovups_load_ymm(as, TOY_YMM0, toy_mem_index(TOY_RDI, TOY_RAX, 4, 0));
-                toy_asm_vmovups_load_ymm(as, TOY_YMM1, toy_mem_index(TOY_RSI, TOY_RAX, 4, 0));
-                toy_asm_vaddps(as, true, TOY_YMM0, TOY_YMM0, TOY_YMM1);
-                toy_asm_vmovups_store_ymm(as, toy_mem_index(TOY_RDX, TOY_RAX, 4, 0), TOY_YMM0);
+                asm_vmovups_load_ymm(as, TOY_YMM0, mem_index(TOY_RDI, TOY_RAX, 4, 0));
+                asm_vmovups_load_ymm(as, TOY_YMM1, mem_index(TOY_RSI, TOY_RAX, 4, 0));
+                asm_vaddps(as, true, TOY_YMM0, TOY_YMM0, TOY_YMM1);
+                asm_vmovups_store_ymm(as, mem_index(TOY_RDX, TOY_RAX, 4, 0), TOY_YMM0);
             } else {
-                toy_asm_vmovss_load(as, TOY_XMM0, toy_mem_index(TOY_RDI, TOY_RAX, 4, 0));
-                toy_asm_vmovss_load(as, TOY_XMM1, toy_mem_index(TOY_RSI, TOY_RAX, 4, 0));
-                toy_asm_vaddps(as, false, TOY_XMM0, TOY_XMM0, TOY_XMM1);
-                toy_asm_vmovss_store(as, toy_mem_index(TOY_RDX, TOY_RAX, 4, 0), TOY_XMM0);
+                asm_vmovss_load(as, TOY_XMM0, mem_index(TOY_RDI, TOY_RAX, 4, 0));
+                asm_vmovss_load(as, TOY_XMM1, mem_index(TOY_RSI, TOY_RAX, 4, 0));
+                asm_vaddps(as, false, TOY_XMM0, TOY_XMM0, TOY_XMM1);
+                asm_vmovss_store(as, mem_index(TOY_RDX, TOY_RAX, 4, 0), TOY_XMM0);
             }
         }
-        toy_asm_add_imm(as, TOY_RAX, (int32_t) step);
-        toy_asm_cmp_imm(as, TOY_RAX, (int32_t) main);
-        toy_asm_jcc(as, TOY_CC_NE, 0);
+        asm_add_imm(as, TOY_RAX, (int32_t) step);
+        asm_cmp_imm(as, TOY_RAX, (int32_t) main);
+        asm_jcc(as, TOY_CC_NE, 0);
     }
     if (main < count) {
-        toy_asm_label(as, 1);
+        asm_label(as, 1);
         if (scale) {
-            toy_asm_vmovss_load(as, TOY_XMM0, toy_mem_index(TOY_RDI, TOY_RAX, 4, 0));
-            toy_asm_vmulps(as, false, TOY_XMM0, TOY_XMM0, TOY_XMM7);
-            toy_asm_vmovss_store(as, toy_mem_index(TOY_RDX, TOY_RAX, 4, 0), TOY_XMM0);
+            asm_vmovss_load(as, TOY_XMM0, mem_index(TOY_RDI, TOY_RAX, 4, 0));
+            asm_vmulps(as, false, TOY_XMM0, TOY_XMM0, TOY_XMM7);
+            asm_vmovss_store(as, mem_index(TOY_RDX, TOY_RAX, 4, 0), TOY_XMM0);
         } else {
-            toy_asm_vmovss_load(as, TOY_XMM0, toy_mem_index(TOY_RDI, TOY_RAX, 4, 0));
-            toy_asm_vmovss_load(as, TOY_XMM1, toy_mem_index(TOY_RSI, TOY_RAX, 4, 0));
-            toy_asm_vaddps(as, false, TOY_XMM0, TOY_XMM0, TOY_XMM1);
-            toy_asm_vmovss_store(as, toy_mem_index(TOY_RDX, TOY_RAX, 4, 0), TOY_XMM0);
+            asm_vmovss_load(as, TOY_XMM0, mem_index(TOY_RDI, TOY_RAX, 4, 0));
+            asm_vmovss_load(as, TOY_XMM1, mem_index(TOY_RSI, TOY_RAX, 4, 0));
+            asm_vaddps(as, false, TOY_XMM0, TOY_XMM0, TOY_XMM1);
+            asm_vmovss_store(as, mem_index(TOY_RDX, TOY_RAX, 4, 0), TOY_XMM0);
         }
-        toy_asm_add_imm(as, TOY_RAX, 1);
-        toy_asm_cmp_imm(as, TOY_RAX, (int32_t) count);
-        toy_asm_jcc(as, TOY_CC_NE, 1);
+        asm_add_imm(as, TOY_RAX, 1);
+        asm_cmp_imm(as, TOY_RAX, (int32_t) count);
+        asm_jcc(as, TOY_CC_NE, 1);
     }
 }
 
@@ -449,66 +449,66 @@ static void emit_element_binary(struct toy_asm *as, uint32_t op, uint32_t count,
  * reference bit for bit
  * wide applies to the output loop only
  */
-static void emit_rmsnorm(struct toy_asm *as, uint32_t n, bool wide, uint32_t eps_bits) {
+static void emit_rmsnorm(struct assembler *as, uint32_t n, bool wide, uint32_t eps_bits) {
     if (n == 0) {
         return;
     }
 
-    toy_asm_vxorps(as, false, TOY_XMM0, TOY_XMM0, TOY_XMM0);
-    toy_asm_xor_rr(as, TOY_RAX, TOY_RAX);
-    toy_asm_label(as, 0);
-    toy_asm_vmovss_load(as, TOY_XMM1, toy_mem_index(TOY_RDI, TOY_RAX, 4, 0));
-    toy_asm_vfmadd231ss_mem(as, TOY_XMM0, TOY_XMM1, toy_mem_index(TOY_RDI, TOY_RAX, 4, 0));
-    toy_asm_add_imm(as, TOY_RAX, 1);
-    toy_asm_cmp_imm(as, TOY_RAX, (int32_t) n);
-    toy_asm_jcc(as, TOY_CC_NE, 0);
+    asm_vxorps(as, false, TOY_XMM0, TOY_XMM0, TOY_XMM0);
+    asm_xor_rr(as, TOY_RAX, TOY_RAX);
+    asm_label(as, 0);
+    asm_vmovss_load(as, TOY_XMM1, mem_index(TOY_RDI, TOY_RAX, 4, 0));
+    asm_vfmadd231ss_mem(as, TOY_XMM0, TOY_XMM1, mem_index(TOY_RDI, TOY_RAX, 4, 0));
+    asm_add_imm(as, TOY_RAX, 1);
+    asm_cmp_imm(as, TOY_RAX, (int32_t) n);
+    asm_jcc(as, TOY_CC_NE, 0);
 
     // scale = 1 / sqrt(sumsq / n + eps)
     emit_const_xmm(as, TOY_XMM1, float_bits((float) n));
-    toy_asm_vdivps(as, false, TOY_XMM0, TOY_XMM0, TOY_XMM1);
+    asm_vdivps(as, false, TOY_XMM0, TOY_XMM0, TOY_XMM1);
     emit_const_xmm(as, TOY_XMM1, eps_bits);
-    toy_asm_vaddps(as, false, TOY_XMM0, TOY_XMM0, TOY_XMM1);
-    toy_asm_vsqrtps(as, false, TOY_XMM0, TOY_XMM0);
+    asm_vaddps(as, false, TOY_XMM0, TOY_XMM0, TOY_XMM1);
+    asm_vsqrtps(as, false, TOY_XMM0, TOY_XMM0);
     emit_const_xmm(as, TOY_XMM1, float_bits(1.0f));
-    toy_asm_vdivps(as, false, TOY_XMM0, TOY_XMM1, TOY_XMM0);
+    asm_vdivps(as, false, TOY_XMM0, TOY_XMM1, TOY_XMM0);
 
-    toy_asm_vshufps(as, TOY_XMM7, TOY_XMM0, TOY_XMM0, 0x00);
+    asm_vshufps(as, TOY_XMM7, TOY_XMM0, TOY_XMM0, 0x00);
     if (wide) {
-        toy_asm_vinsertf128(as, TOY_YMM7, TOY_YMM7, TOY_XMM7, 1);
+        asm_vinsertf128(as, TOY_YMM7, TOY_YMM7, TOY_XMM7, 1);
     }
 
     const uint32_t step = wide ? 8u : 1u;
     const uint32_t main = n - (n % step);
-    toy_asm_xor_rr(as, TOY_RAX, TOY_RAX);
+    asm_xor_rr(as, TOY_RAX, TOY_RAX);
     if (main != 0) {
-        toy_asm_label(as, 1);
+        asm_label(as, 1);
         if (wide) {
-            toy_asm_vmovups_load_ymm(as, TOY_YMM0, toy_mem_index(TOY_RDI, TOY_RAX, 4, 0));
-            toy_asm_vmulps(as, true, TOY_YMM0, TOY_YMM0, TOY_YMM7);
-            toy_asm_vmovups_load_ymm(as, TOY_YMM1, toy_mem_index(TOY_RSI, TOY_RAX, 4, 0));
-            toy_asm_vmulps(as, true, TOY_YMM0, TOY_YMM0, TOY_YMM1);
-            toy_asm_vmovups_store_ymm(as, toy_mem_index(TOY_RDX, TOY_RAX, 4, 0), TOY_YMM0);
+            asm_vmovups_load_ymm(as, TOY_YMM0, mem_index(TOY_RDI, TOY_RAX, 4, 0));
+            asm_vmulps(as, true, TOY_YMM0, TOY_YMM0, TOY_YMM7);
+            asm_vmovups_load_ymm(as, TOY_YMM1, mem_index(TOY_RSI, TOY_RAX, 4, 0));
+            asm_vmulps(as, true, TOY_YMM0, TOY_YMM0, TOY_YMM1);
+            asm_vmovups_store_ymm(as, mem_index(TOY_RDX, TOY_RAX, 4, 0), TOY_YMM0);
         } else {
-            toy_asm_vmovss_load(as, TOY_XMM0, toy_mem_index(TOY_RDI, TOY_RAX, 4, 0));
-            toy_asm_vmulps(as, false, TOY_XMM0, TOY_XMM0, TOY_XMM7);
-            toy_asm_vmovss_load(as, TOY_XMM1, toy_mem_index(TOY_RSI, TOY_RAX, 4, 0));
-            toy_asm_vmulps(as, false, TOY_XMM0, TOY_XMM0, TOY_XMM1);
-            toy_asm_vmovss_store(as, toy_mem_index(TOY_RDX, TOY_RAX, 4, 0), TOY_XMM0);
+            asm_vmovss_load(as, TOY_XMM0, mem_index(TOY_RDI, TOY_RAX, 4, 0));
+            asm_vmulps(as, false, TOY_XMM0, TOY_XMM0, TOY_XMM7);
+            asm_vmovss_load(as, TOY_XMM1, mem_index(TOY_RSI, TOY_RAX, 4, 0));
+            asm_vmulps(as, false, TOY_XMM0, TOY_XMM0, TOY_XMM1);
+            asm_vmovss_store(as, mem_index(TOY_RDX, TOY_RAX, 4, 0), TOY_XMM0);
         }
-        toy_asm_add_imm(as, TOY_RAX, (int32_t) step);
-        toy_asm_cmp_imm(as, TOY_RAX, (int32_t) main);
-        toy_asm_jcc(as, TOY_CC_NE, 1);
+        asm_add_imm(as, TOY_RAX, (int32_t) step);
+        asm_cmp_imm(as, TOY_RAX, (int32_t) main);
+        asm_jcc(as, TOY_CC_NE, 1);
     }
     if (main < n) {
-        toy_asm_label(as, 2);
-        toy_asm_vmovss_load(as, TOY_XMM0, toy_mem_index(TOY_RDI, TOY_RAX, 4, 0));
-        toy_asm_vmulps(as, false, TOY_XMM0, TOY_XMM0, TOY_XMM7);
-        toy_asm_vmovss_load(as, TOY_XMM1, toy_mem_index(TOY_RSI, TOY_RAX, 4, 0));
-        toy_asm_vmulps(as, false, TOY_XMM0, TOY_XMM0, TOY_XMM1);
-        toy_asm_vmovss_store(as, toy_mem_index(TOY_RDX, TOY_RAX, 4, 0), TOY_XMM0);
-        toy_asm_add_imm(as, TOY_RAX, 1);
-        toy_asm_cmp_imm(as, TOY_RAX, (int32_t) n);
-        toy_asm_jcc(as, TOY_CC_NE, 2);
+        asm_label(as, 2);
+        asm_vmovss_load(as, TOY_XMM0, mem_index(TOY_RDI, TOY_RAX, 4, 0));
+        asm_vmulps(as, false, TOY_XMM0, TOY_XMM0, TOY_XMM7);
+        asm_vmovss_load(as, TOY_XMM1, mem_index(TOY_RSI, TOY_RAX, 4, 0));
+        asm_vmulps(as, false, TOY_XMM0, TOY_XMM0, TOY_XMM1);
+        asm_vmovss_store(as, mem_index(TOY_RDX, TOY_RAX, 4, 0), TOY_XMM0);
+        asm_add_imm(as, TOY_RAX, 1);
+        asm_cmp_imm(as, TOY_RAX, (int32_t) n);
+        asm_jcc(as, TOY_CC_NE, 2);
     }
 }
 
@@ -526,7 +526,7 @@ static bool op_is_q8_0(uint32_t op) {
  * sum, then the f16 scale folds into the output. The caller splits the row tail
  * and the column tail with generation-time constants
  */
-static void emit_q8_scalar(struct toy_asm *as, uint32_t rows, uint32_t cols, uint32_t n,
+static void emit_q8_scalar(struct assembler *as, uint32_t rows, uint32_t cols, uint32_t n,
                            uint32_t k, uint32_t startCol,
                            uint8_t labelRow, uint8_t labelCol, uint8_t labelBlock) {
     if (rows == 0 || cols == 0) {
@@ -538,56 +538,56 @@ static void emit_q8_scalar(struct toy_asm *as, uint32_t rows, uint32_t cols, uin
     const int32_t xBlockStep = (int32_t)(TOY_Q8_0_BLOCK * n * 4);
     const int32_t startColBytes = (int32_t)(startCol * 4);
 
-    toy_asm_xor_rr(as, TOY_RCX, TOY_RCX);
-    toy_asm_mov_rr(as, TOY_R9, TOY_RDX);
+    asm_xor_rr(as, TOY_RCX, TOY_RCX);
+    asm_mov_rr(as, TOY_R9, TOY_RDX);
     if (startColBytes != 0) {
-        toy_asm_add_imm(as, TOY_R9, startColBytes);
+        asm_add_imm(as, TOY_R9, startColBytes);
     }
-    toy_asm_label(as, labelRow);
-    toy_asm_xor_rr(as, TOY_RAX, TOY_RAX);
-    toy_asm_label(as, labelCol);
-    toy_asm_vxorps(as, false, TOY_XMM4, TOY_XMM4, TOY_XMM4);
-    toy_asm_mov_rr(as, TOY_R8, TOY_RDI);
-    toy_asm_lea(as, TOY_R10, toy_mem_index(TOY_RSI, TOY_RAX, 4, startColBytes));
-    toy_asm_xor_rr(as, TOY_R11, TOY_R11);
+    asm_label(as, labelRow);
+    asm_xor_rr(as, TOY_RAX, TOY_RAX);
+    asm_label(as, labelCol);
+    asm_vxorps(as, false, TOY_XMM4, TOY_XMM4, TOY_XMM4);
+    asm_mov_rr(as, TOY_R8, TOY_RDI);
+    asm_lea(as, TOY_R10, mem_index(TOY_RSI, TOY_RAX, 4, startColBytes));
+    asm_xor_rr(as, TOY_R11, TOY_R11);
     if (blocks > 1) {
-        toy_asm_label(as, labelBlock);
+        asm_label(as, labelBlock);
     }
-    toy_asm_vxorps(as, false, TOY_XMM0, TOY_XMM0, TOY_XMM0);
+    asm_vxorps(as, false, TOY_XMM0, TOY_XMM0, TOY_XMM0);
     for (int g = 0; g < 8; g++) {
-        toy_asm_vpmovsxbd(as, false, TOY_XMM1, toy_mem_base(TOY_R8, (int32_t)(2 + 4 * g)));
-        toy_asm_vcvtdq2ps(as, false, TOY_XMM1, TOY_XMM1);
+        asm_vpmovsxbd(as, false, TOY_XMM1, mem_base(TOY_R8, (int32_t)(2 + 4 * g)));
+        asm_vcvtdq2ps(as, false, TOY_XMM1, TOY_XMM1);
         for (int l = 0; l < 4; l++) {
             const int p = 4 * g + l;
-            toy_asm_vpermilps(as, TOY_XMM2, TOY_XMM1, (uint8_t)(l * 0x55));
-            toy_asm_vfmadd231ss_mem(as, TOY_XMM0, TOY_XMM2,
-                                    toy_mem_base(TOY_R10, (int32_t)(p * n * 4)));
+            asm_vpermilps(as, TOY_XMM2, TOY_XMM1, (uint8_t)(l * 0x55));
+            asm_vfmadd231ss_mem(as, TOY_XMM0, TOY_XMM2,
+                                    mem_base(TOY_R10, (int32_t)(p * n * 4)));
         }
     }
-    toy_asm_vcvtph2ps(as, TOY_XMM3, toy_mem_base(TOY_R8, 0));
-    toy_asm_vfmadd231ss(as, TOY_XMM4, TOY_XMM3, TOY_XMM0);
+    asm_vcvtph2ps(as, TOY_XMM3, mem_base(TOY_R8, 0));
+    asm_vfmadd231ss(as, TOY_XMM4, TOY_XMM3, TOY_XMM0);
     if (blocks > 1) {
-        toy_asm_add_imm(as, TOY_R8, TOY_Q8_0_BLOCK_BYTES);
-        toy_asm_add_imm(as, TOY_R10, xBlockStep);
-        toy_asm_add_imm(as, TOY_R11, 1);
-        toy_asm_cmp_imm(as, TOY_R11, (int32_t)blocks);
-        toy_asm_jcc(as, TOY_CC_NE, labelBlock);
+        asm_add_imm(as, TOY_R8, TOY_Q8_0_BLOCK_BYTES);
+        asm_add_imm(as, TOY_R10, xBlockStep);
+        asm_add_imm(as, TOY_R11, 1);
+        asm_cmp_imm(as, TOY_R11, (int32_t)blocks);
+        asm_jcc(as, TOY_CC_NE, labelBlock);
     }
-    toy_asm_vmovss_store(as, toy_mem_index(TOY_R9, TOY_RAX, 4, 0), TOY_XMM4);
+    asm_vmovss_store(as, mem_index(TOY_R9, TOY_RAX, 4, 0), TOY_XMM4);
     if (cols > 1) {
-        toy_asm_add_imm(as, TOY_RAX, 1);
-        toy_asm_cmp_imm(as, TOY_RAX, (int32_t)cols);
-        toy_asm_jcc(as, TOY_CC_NE, labelCol);
+        asm_add_imm(as, TOY_RAX, 1);
+        asm_cmp_imm(as, TOY_RAX, (int32_t)cols);
+        asm_jcc(as, TOY_CC_NE, labelCol);
     }
-    toy_asm_add_imm(as, TOY_RDI, rowBytes);
-    toy_asm_add_imm(as, TOY_R9, (int32_t)(n * 4));
-    toy_asm_add_imm(as, TOY_RCX, 1);
+    asm_add_imm(as, TOY_RDI, rowBytes);
+    asm_add_imm(as, TOY_R9, (int32_t)(n * 4));
+    asm_add_imm(as, TOY_RCX, 1);
     if (rows > 1) {
-        toy_asm_cmp_imm(as, TOY_RCX, (int32_t)rows);
-        toy_asm_jcc(as, TOY_CC_NE, labelRow);
+        asm_cmp_imm(as, TOY_RCX, (int32_t)rows);
+        asm_jcc(as, TOY_CC_NE, labelRow);
     }
     // Restore rdi to the base of w for the later regions of the same kernel
-    toy_asm_sub_imm(as, TOY_RDI, rowTotal);
+    asm_sub_imm(as, TOY_RDI, rowTotal);
 }
 
 /*
@@ -596,53 +596,53 @@ static void emit_q8_scalar(struct toy_asm *as, uint32_t rows, uint32_t cols, uin
  * A horizontal sum closes the block, then the f16 scale folds into the scalar
  * output
  */
-static void emit_q8_avx2_dotmatvec(struct toy_asm *as, uint32_t rows, uint32_t k) {
+static void emit_q8_avx2_dotmatvec(struct assembler *as, uint32_t rows, uint32_t k) {
     const uint32_t blocks = k / TOY_Q8_0_BLOCK;
     const int32_t rowBytes = (int32_t)(blocks * TOY_Q8_0_BLOCK_BYTES);
     const int32_t rowTotal = (int32_t)(rows * blocks * TOY_Q8_0_BLOCK_BYTES);
 
-    toy_asm_xor_rr(as, TOY_RCX, TOY_RCX);
-    toy_asm_label(as, 0);
-    toy_asm_vxorps(as, false, TOY_XMM7, TOY_XMM7, TOY_XMM7);
-    toy_asm_mov_rr(as, TOY_R8, TOY_RDI);
-    toy_asm_mov_rr(as, TOY_R10, TOY_RSI);
-    toy_asm_xor_rr(as, TOY_RAX, TOY_RAX);
+    asm_xor_rr(as, TOY_RCX, TOY_RCX);
+    asm_label(as, 0);
+    asm_vxorps(as, false, TOY_XMM7, TOY_XMM7, TOY_XMM7);
+    asm_mov_rr(as, TOY_R8, TOY_RDI);
+    asm_mov_rr(as, TOY_R10, TOY_RSI);
+    asm_xor_rr(as, TOY_RAX, TOY_RAX);
     if (blocks > 1) {
-        toy_asm_label(as, 1);
+        asm_label(as, 1);
     }
     for (uint8_t g = 0; g < 4; g++) {
-        toy_asm_vxorps(as, true, g, g, g);
+        asm_vxorps(as, true, g, g, g);
     }
     for (uint8_t g = 0; g < 4; g++) {
-        toy_asm_vmovups_load_ymm(as, TOY_YMM4, toy_mem_base(TOY_R10, (int32_t)(g * 32)));
-        toy_asm_vpmovsxbd(as, true, TOY_YMM5, toy_mem_base(TOY_R8, (int32_t)(2 + g * 8)));
-        toy_asm_vcvtdq2ps(as, true, TOY_YMM5, TOY_YMM5);
-        toy_asm_vfmadd231ps(as, g, TOY_YMM5, TOY_YMM4);
+        asm_vmovups_load_ymm(as, TOY_YMM4, mem_base(TOY_R10, (int32_t)(g * 32)));
+        asm_vpmovsxbd(as, true, TOY_YMM5, mem_base(TOY_R8, (int32_t)(2 + g * 8)));
+        asm_vcvtdq2ps(as, true, TOY_YMM5, TOY_YMM5);
+        asm_vfmadd231ps(as, g, TOY_YMM5, TOY_YMM4);
     }
-    toy_asm_vaddps(as, true, TOY_YMM0, TOY_YMM0, TOY_YMM1);
-    toy_asm_vaddps(as, true, TOY_YMM2, TOY_YMM2, TOY_YMM3);
-    toy_asm_vaddps(as, true, TOY_YMM0, TOY_YMM0, TOY_YMM2);
-    toy_asm_vextractf128(as, TOY_XMM4, TOY_YMM0, 1);
-    toy_asm_vaddps(as, false, TOY_XMM0, TOY_XMM0, TOY_XMM4);
-    toy_asm_vhaddps(as, TOY_XMM0, TOY_XMM0, TOY_XMM0);
-    toy_asm_vhaddps(as, TOY_XMM0, TOY_XMM0, TOY_XMM0);
-    toy_asm_vcvtph2ps(as, TOY_XMM6, toy_mem_base(TOY_R8, 0));
-    toy_asm_vfmadd231ss(as, TOY_XMM7, TOY_XMM6, TOY_XMM0);
+    asm_vaddps(as, true, TOY_YMM0, TOY_YMM0, TOY_YMM1);
+    asm_vaddps(as, true, TOY_YMM2, TOY_YMM2, TOY_YMM3);
+    asm_vaddps(as, true, TOY_YMM0, TOY_YMM0, TOY_YMM2);
+    asm_vextractf128(as, TOY_XMM4, TOY_YMM0, 1);
+    asm_vaddps(as, false, TOY_XMM0, TOY_XMM0, TOY_XMM4);
+    asm_vhaddps(as, TOY_XMM0, TOY_XMM0, TOY_XMM0);
+    asm_vhaddps(as, TOY_XMM0, TOY_XMM0, TOY_XMM0);
+    asm_vcvtph2ps(as, TOY_XMM6, mem_base(TOY_R8, 0));
+    asm_vfmadd231ss(as, TOY_XMM7, TOY_XMM6, TOY_XMM0);
     if (blocks > 1) {
-        toy_asm_add_imm(as, TOY_R8, TOY_Q8_0_BLOCK_BYTES);
-        toy_asm_add_imm(as, TOY_R10, TOY_Q8_0_BLOCK * 4);
-        toy_asm_add_imm(as, TOY_RAX, 1);
-        toy_asm_cmp_imm(as, TOY_RAX, (int32_t)blocks);
-        toy_asm_jcc(as, TOY_CC_NE, 1);
+        asm_add_imm(as, TOY_R8, TOY_Q8_0_BLOCK_BYTES);
+        asm_add_imm(as, TOY_R10, TOY_Q8_0_BLOCK * 4);
+        asm_add_imm(as, TOY_RAX, 1);
+        asm_cmp_imm(as, TOY_RAX, (int32_t)blocks);
+        asm_jcc(as, TOY_CC_NE, 1);
     }
-    toy_asm_vmovss_store(as, toy_mem_index(TOY_RDX, TOY_RCX, 4, 0), TOY_XMM7);
-    toy_asm_add_imm(as, TOY_RDI, rowBytes);
-    toy_asm_add_imm(as, TOY_RCX, 1);
+    asm_vmovss_store(as, mem_index(TOY_RDX, TOY_RCX, 4, 0), TOY_XMM7);
+    asm_add_imm(as, TOY_RDI, rowBytes);
+    asm_add_imm(as, TOY_RCX, 1);
     if (rows > 1) {
-        toy_asm_cmp_imm(as, TOY_RCX, (int32_t)rows);
-        toy_asm_jcc(as, TOY_CC_NE, 0);
+        asm_cmp_imm(as, TOY_RCX, (int32_t)rows);
+        asm_jcc(as, TOY_CC_NE, 0);
     }
-    toy_asm_sub_imm(as, TOY_RDI, rowTotal);
+    asm_sub_imm(as, TOY_RDI, rowTotal);
 }
 
 /*
@@ -652,48 +652,48 @@ static void emit_q8_avx2_dotmatvec(struct toy_asm *as, uint32_t rows, uint32_t k
  * On entry rdi is the weight base of the current row, rdx is the output address
  * of the current row, rsi is the base of x, r10 is the column offset
  */
-static void emit_q8_matmul_body(struct toy_asm *as, uint32_t n, uint32_t blocks,
+static void emit_q8_matmul_body(struct assembler *as, uint32_t n, uint32_t blocks,
                                 int32_t xBlockStep, uint8_t labelBlock) {
-    toy_asm_vxorps(as, true, TOY_YMM0, TOY_YMM0, TOY_YMM0);
-    toy_asm_vxorps(as, true, TOY_YMM1, TOY_YMM1, TOY_YMM1);
-    toy_asm_mov_rr(as, TOY_R8, TOY_RDI);
-    toy_asm_lea(as, TOY_RCX, toy_mem_index(TOY_RSI, TOY_R10, 4, 0));
-    toy_asm_xor_rr(as, TOY_R11, TOY_R11);
+    asm_vxorps(as, true, TOY_YMM0, TOY_YMM0, TOY_YMM0);
+    asm_vxorps(as, true, TOY_YMM1, TOY_YMM1, TOY_YMM1);
+    asm_mov_rr(as, TOY_R8, TOY_RDI);
+    asm_lea(as, TOY_RCX, mem_index(TOY_RSI, TOY_R10, 4, 0));
+    asm_xor_rr(as, TOY_R11, TOY_R11);
     if (blocks > 1) {
-        toy_asm_label(as, labelBlock);
+        asm_label(as, labelBlock);
     }
-    toy_asm_vxorps(as, true, TOY_YMM2, TOY_YMM2, TOY_YMM2);
-    toy_asm_vxorps(as, true, TOY_YMM3, TOY_YMM3, TOY_YMM3);
+    asm_vxorps(as, true, TOY_YMM2, TOY_YMM2, TOY_YMM2);
+    asm_vxorps(as, true, TOY_YMM3, TOY_YMM3, TOY_YMM3);
     for (int g = 0; g < 8; g++) {
-        toy_asm_vpmovsxbd(as, false, TOY_XMM4, toy_mem_base(TOY_R8, (int32_t)(2 + 4 * g)));
-        toy_asm_vcvtdq2ps(as, false, TOY_XMM4, TOY_XMM4);
+        asm_vpmovsxbd(as, false, TOY_XMM4, mem_base(TOY_R8, (int32_t)(2 + 4 * g)));
+        asm_vcvtdq2ps(as, false, TOY_XMM4, TOY_XMM4);
         for (int l = 0; l < 4; l++) {
             const int p = 4 * g + l;
-            toy_asm_vpermilps(as, TOY_XMM5, TOY_XMM4, (uint8_t)(l * 0x55));
-            toy_asm_vbroadcastss_reg(as, TOY_YMM5, TOY_XMM5);
-            toy_asm_vmovups_load_ymm(as, TOY_YMM6, toy_mem_base(TOY_RCX, (int32_t)(p * n * 4)));
-            toy_asm_vmovups_load_ymm(as, TOY_YMM7,
-                                     toy_mem_base(TOY_RCX, (int32_t)(p * n * 4 + 32)));
-            toy_asm_vfmadd231ps(as, TOY_YMM2, TOY_YMM5, TOY_YMM6);
-            toy_asm_vfmadd231ps(as, TOY_YMM3, TOY_YMM5, TOY_YMM7);
+            asm_vpermilps(as, TOY_XMM5, TOY_XMM4, (uint8_t)(l * 0x55));
+            asm_vbroadcastss_reg(as, TOY_YMM5, TOY_XMM5);
+            asm_vmovups_load_ymm(as, TOY_YMM6, mem_base(TOY_RCX, (int32_t)(p * n * 4)));
+            asm_vmovups_load_ymm(as, TOY_YMM7,
+                                     mem_base(TOY_RCX, (int32_t)(p * n * 4 + 32)));
+            asm_vfmadd231ps(as, TOY_YMM2, TOY_YMM5, TOY_YMM6);
+            asm_vfmadd231ps(as, TOY_YMM3, TOY_YMM5, TOY_YMM7);
         }
     }
-    toy_asm_vcvtph2ps(as, TOY_XMM4, toy_mem_base(TOY_R8, 0));
-    toy_asm_vbroadcastss_reg(as, TOY_YMM4, TOY_XMM4);
-    toy_asm_vfmadd231ps(as, TOY_YMM0, TOY_YMM4, TOY_YMM2);
-    toy_asm_vfmadd231ps(as, TOY_YMM1, TOY_YMM4, TOY_YMM3);
+    asm_vcvtph2ps(as, TOY_XMM4, mem_base(TOY_R8, 0));
+    asm_vbroadcastss_reg(as, TOY_YMM4, TOY_XMM4);
+    asm_vfmadd231ps(as, TOY_YMM0, TOY_YMM4, TOY_YMM2);
+    asm_vfmadd231ps(as, TOY_YMM1, TOY_YMM4, TOY_YMM3);
     if (blocks > 1) {
-        toy_asm_add_imm(as, TOY_R8, TOY_Q8_0_BLOCK_BYTES);
-        toy_asm_add_imm(as, TOY_RCX, xBlockStep);
-        toy_asm_add_imm(as, TOY_R11, 1);
-        toy_asm_cmp_imm(as, TOY_R11, (int32_t)blocks);
-        toy_asm_jcc(as, TOY_CC_NE, labelBlock);
+        asm_add_imm(as, TOY_R8, TOY_Q8_0_BLOCK_BYTES);
+        asm_add_imm(as, TOY_RCX, xBlockStep);
+        asm_add_imm(as, TOY_R11, 1);
+        asm_cmp_imm(as, TOY_R11, (int32_t)blocks);
+        asm_jcc(as, TOY_CC_NE, labelBlock);
     }
-    toy_asm_vmovups_store_ymm(as, toy_mem_index(TOY_RDX, TOY_R10, 4, 0), TOY_YMM0);
-    toy_asm_vmovups_store_ymm(as, toy_mem_index(TOY_RDX, TOY_R10, 4, 32), TOY_YMM1);
+    asm_vmovups_store_ymm(as, mem_index(TOY_RDX, TOY_R10, 4, 0), TOY_YMM0);
+    asm_vmovups_store_ymm(as, mem_index(TOY_RDX, TOY_R10, 4, 32), TOY_YMM1);
 }
 
-static void emit_q8_avx2_matmul(struct toy_asm *as, uint32_t m, uint32_t n, uint32_t k) {
+static void emit_q8_avx2_matmul(struct assembler *as, uint32_t m, uint32_t n, uint32_t k) {
     const uint32_t blocks = k / TOY_Q8_0_BLOCK;
     const uint32_t n16 = n & ~15u;
     const int32_t rowBytes = (int32_t)(blocks * TOY_Q8_0_BLOCK_BYTES);
@@ -712,44 +712,44 @@ static void emit_q8_avx2_matmul(struct toy_asm *as, uint32_t m, uint32_t n, uint
          * the x slice of one tile stay in L2 and the weight stream does not push x
          * out of the cache
          */
-        toy_asm_xor_rr(as, TOY_R10, TOY_R10);
-        toy_asm_label(as, 1);
-        toy_asm_xor_rr(as, TOY_R9, TOY_R9);
-        toy_asm_label(as, 3);
-        toy_asm_xor_rr(as, TOY_RAX, TOY_RAX);
-        toy_asm_label(as, 0);
+        asm_xor_rr(as, TOY_R10, TOY_R10);
+        asm_label(as, 1);
+        asm_xor_rr(as, TOY_R9, TOY_R9);
+        asm_label(as, 3);
+        asm_xor_rr(as, TOY_RAX, TOY_RAX);
+        asm_label(as, 0);
         emit_q8_matmul_body(as, n, blocks, xBlockStep, 2);
-        toy_asm_add_imm(as, TOY_RDI, rowBytes);
-        toy_asm_add_imm(as, TOY_RDX, cRowStep);
-        toy_asm_add_imm(as, TOY_RAX, 1);
-        toy_asm_cmp_imm(as, TOY_RAX, (int32_t)tileRows);
-        toy_asm_jcc(as, TOY_CC_NE, 0);
-        toy_asm_add_imm(as, TOY_R9, (int32_t)tileRows);
-        toy_asm_cmp_imm(as, TOY_R9, (int32_t)tileMain);
-        toy_asm_jcc(as, TOY_CC_NE, 3);
+        asm_add_imm(as, TOY_RDI, rowBytes);
+        asm_add_imm(as, TOY_RDX, cRowStep);
+        asm_add_imm(as, TOY_RAX, 1);
+        asm_cmp_imm(as, TOY_RAX, (int32_t)tileRows);
+        asm_jcc(as, TOY_CC_NE, 0);
+        asm_add_imm(as, TOY_R9, (int32_t)tileRows);
+        asm_cmp_imm(as, TOY_R9, (int32_t)tileMain);
+        asm_jcc(as, TOY_CC_NE, 3);
         if (tileTail != 0) {
-            toy_asm_xor_rr(as, TOY_RAX, TOY_RAX);
-            toy_asm_label(as, 4);
+            asm_xor_rr(as, TOY_RAX, TOY_RAX);
+            asm_label(as, 4);
             emit_q8_matmul_body(as, n, blocks, xBlockStep, 5);
-            toy_asm_add_imm(as, TOY_RDI, rowBytes);
-            toy_asm_add_imm(as, TOY_RDX, cRowStep);
-            toy_asm_add_imm(as, TOY_RAX, 1);
-            toy_asm_cmp_imm(as, TOY_RAX, (int32_t)tileTail);
-            toy_asm_jcc(as, TOY_CC_NE, 4);
+            asm_add_imm(as, TOY_RDI, rowBytes);
+            asm_add_imm(as, TOY_RDX, cRowStep);
+            asm_add_imm(as, TOY_RAX, 1);
+            asm_cmp_imm(as, TOY_RAX, (int32_t)tileTail);
+            asm_jcc(as, TOY_CC_NE, 4);
         }
-        toy_asm_sub_imm(as, TOY_RDI, rowTotal);
-        toy_asm_sub_imm(as, TOY_RDX, cTotal);
+        asm_sub_imm(as, TOY_RDI, rowTotal);
+        asm_sub_imm(as, TOY_RDX, cTotal);
         if (n16 > 16) {
-            toy_asm_add_imm(as, TOY_R10, 16);
-            toy_asm_cmp_imm(as, TOY_R10, (int32_t)n16);
-            toy_asm_jcc(as, TOY_CC_NE, 1);
+            asm_add_imm(as, TOY_R10, 16);
+            asm_cmp_imm(as, TOY_R10, (int32_t)n16);
+            asm_jcc(as, TOY_CC_NE, 1);
         }
     }
 
     emit_q8_scalar(as, m, n - n16, n, k, n16, 6, 7, 8);
 }
 
-static bool spec_valid(const struct toy_spec *spec) {
+static bool spec_valid(const struct spec *spec) {
     if (spec == NULL) {
         return false;
     }
@@ -814,12 +814,12 @@ static bool spec_valid(const struct toy_spec *spec) {
     return true;
 }
 
-size_t toy_emit(const struct toy_spec *spec, uint8_t *buf, size_t cap) {
+size_t emit(const struct spec *spec, uint8_t *buf, size_t cap) {
     if (!spec_valid(spec) || buf == NULL || cap == 0) {
         return 0;
     }
-    struct toy_asm as;
-    toy_asm_init(&as, buf, cap);
+    struct assembler as;
+    asm_init(&as, buf, cap);
 
 #if defined(TOY_WIN64_ABI)
     emit_win64_prologue(&as);
@@ -849,9 +849,9 @@ size_t toy_emit(const struct toy_spec *spec, uint8_t *buf, size_t cap) {
 #if defined(TOY_WIN64_ABI)
         emit_win64_epilogue(&as);
 #endif
-        toy_asm_vzeroupper(&as);
-        toy_asm_ret(&as);
-        if (!toy_asm_finish(&as)) {
+        asm_vzeroupper(&as);
+        asm_ret(&as);
+        if (!asm_finish(&as)) {
             return 0;
         }
         return as.len;
@@ -895,15 +895,15 @@ size_t toy_emit(const struct toy_spec *spec, uint8_t *buf, size_t cap) {
 #if defined(TOY_WIN64_ABI)
     emit_win64_epilogue(&as);
 #endif
-    toy_asm_vzeroupper(&as);
-    toy_asm_ret(&as);
-    if (!toy_asm_finish(&as)) {
+    asm_vzeroupper(&as);
+    asm_ret(&as);
+    if (!asm_finish(&as)) {
         return 0;
     }
     return as.len;
 }
 
-const char *toy_op_name(uint32_t op) {
+const char *op_name(uint32_t op) {
     switch (op) {
         case TOY_OP_GEMM: return "gemm";
         case TOY_OP_MATVEC: return "matvec";
@@ -918,7 +918,7 @@ const char *toy_op_name(uint32_t op) {
     }
 }
 
-const char *toy_isa_name(uint32_t isa) {
+const char *isa_name(uint32_t isa) {
     switch (isa) {
         case TOY_ISA_SCALAR: return "scalar";
         case TOY_ISA_AVX2: return "avx2";
@@ -926,7 +926,7 @@ const char *toy_isa_name(uint32_t isa) {
     }
 }
 
-double toy_spec_flops(const struct toy_spec *spec) {
+double spec_flops(const struct spec *spec) {
     if (spec == NULL) {
         return 0.0;
     }

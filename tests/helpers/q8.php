@@ -7,16 +7,16 @@
  * int8 products in double, then adds d * sum to the output in double.
  */
 
-function toy_test_tensor(array $shape, array $values): Toy\Tensor {
+function test_tensor(array $shape, array $values): Toy\Tensor {
     return Toy\Tensor::fromBytes('f32', $shape, pack('g*', ...$values));
 }
 
 /* Rounds a double to the nearest f32, to mirror the C quantizer */
-function toy_test_f32(float $value): float {
+function test_f32(float $value): float {
     return unpack('g', pack('g', $value))[1];
 }
 
-function toy_test_f16_to_f32(int $bits): float {
+function test_f16_to_f32(int $bits): float {
     $sign = ($bits & 0x8000) ? -1.0 : 1.0;
     $exp = ($bits >> 10) & 0x1F;
     $mant = $bits & 0x3FF;
@@ -29,7 +29,7 @@ function toy_test_f16_to_f32(int $bits): float {
     return $sign * (1.0 + $mant / 1024.0) * 2.0 ** ($exp - 15);
 }
 
-function toy_test_f32_to_f16_bits(float $value): int {
+function test_f32_to_f16_bits(float $value): int {
     $raw = unpack('V', pack('g', $value))[1];
     $sign = ($raw >> 16) & 0x8000;
     $exp = (int)(($raw >> 23) & 0xFF) - 127 + 15;
@@ -59,13 +59,13 @@ function toy_test_f32_to_f16_bits(float $value): int {
     return $sign | $half;
 }
 
-function toy_test_q8_blocks(string $bytes): array {
+function test_q8_blocks(string $bytes): array {
     $blocks = [];
     $count = intdiv(strlen($bytes), 34);
     for ($b = 0; $b < $count; $b++) {
         $raw = substr($bytes, $b * 34, 34);
         $blocks[] = [
-            'd' => toy_test_f16_to_f32(unpack('v', substr($raw, 0, 2))[1]),
+            'd' => test_f16_to_f32(unpack('v', substr($raw, 0, 2))[1]),
             'q' => array_values(unpack('c*', substr($raw, 2))),
         ];
     }
@@ -73,7 +73,7 @@ function toy_test_q8_blocks(string $bytes): array {
 }
 
 /* Returns [values, absSum] where absSum bounds each dot product */
-function toy_test_q8_row_dot(array $blocks, int $first, int $blocksPerRow, array $x,
+function test_q8_row_dot(array $blocks, int $first, int $blocksPerRow, array $x,
                             int $stride, int $offset): array {
     $sum = 0.0;
     $absSum = 0.0;
@@ -92,14 +92,14 @@ function toy_test_q8_row_dot(array $blocks, int $first, int $blocksPerRow, array
     return [$sum, $absSum];
 }
 
-function toy_test_q8_matmul_ref(array $blocks, array $x, int $m, int $n, int $k): array {
+function test_q8_matmul_ref(array $blocks, array $x, int $m, int $n, int $k): array {
     $blocksPerRow = intdiv($k, 32);
     $values = [];
     $absSums = [];
     for ($i = 0; $i < $m; $i++) {
         for ($j = 0; $j < $n; $j++) {
             [$value, $absSum] =
-                toy_test_q8_row_dot($blocks, $i * $blocksPerRow, $blocksPerRow, $x, $n, $j);
+                test_q8_row_dot($blocks, $i * $blocksPerRow, $blocksPerRow, $x, $n, $j);
             $values[] = $value;
             $absSums[] = $absSum;
         }
@@ -107,20 +107,20 @@ function toy_test_q8_matmul_ref(array $blocks, array $x, int $m, int $n, int $k)
     return [$values, $absSums];
 }
 
-function toy_test_q8_matvec_ref(array $blocks, array $x, int $m, int $k): array {
+function test_q8_matvec_ref(array $blocks, array $x, int $m, int $k): array {
     $blocksPerRow = intdiv($k, 32);
     $values = [];
     $absSums = [];
     for ($i = 0; $i < $m; $i++) {
         [$value, $absSum] =
-            toy_test_q8_row_dot($blocks, $i * $blocksPerRow, $blocksPerRow, $x, 1, 0);
+            test_q8_row_dot($blocks, $i * $blocksPerRow, $blocksPerRow, $x, 1, 0);
         $values[] = $value;
         $absSums[] = $absSum;
     }
     return [$values, $absSums];
 }
 
-function toy_test_q8_metrics(array $got, array $ref, array $absSums): array {
+function test_q8_metrics(array $got, array $ref, array $absSums): array {
     $maxAbs = 0.0;
     $maxScaled = 0.0;
     $sqErr = 0.0;
@@ -140,10 +140,10 @@ function toy_test_q8_metrics(array $got, array $ref, array $absSums): array {
 }
 
 /* Deterministic values with mixed signs, so sums can cancel */
-function toy_test_value(int $i, int $seed): float {
+function test_value(int $i, int $seed): float {
     return sin($i * 0.37 + $seed) * 0.7 + cos($i * 0.11 + $seed * 0.5) * 0.3;
 }
 
-function toy_test_floats(Toy\Tensor $tensor): array {
+function test_floats(Toy\Tensor $tensor): array {
     return array_values(unpack('g*', $tensor->toBytes()));
 }

@@ -3,36 +3,36 @@
  * The table lives outside the arena. It never evicts an entry.
  */
 
-#include "toy_spec_cache.h"
-#include "toy_platform.h"
+#include "spec_cache.h"
+#include "platform.h"
 
 #include <stdlib.h>
 #include <string.h>
 
-typedef struct toy_spec_entry {
+typedef struct spec_entry {
     uint64_t hash;
     uint8_t key[TOY_SPEC_KEY_SIZE];
     uint8_t *code;
     uint32_t pages;
     uint32_t filled;
-} toy_spec_entry;
+} spec_entry;
 
-struct toy_spec_cache {
-    toy_arena *arena;
-    toy_spec_entry *entries;
+struct spec_cache {
+    arena *arena;
+    spec_entry *entries;
     size_t capacity;
     size_t mask;
     size_t used;
-    toy_platform_lock lock;
-    toy_spec_cache_stats stats;
+    platform_lock lock;
+    spec_cache_stats stats;
 };
 
-static bool toy_spec_cache_is_pow2(size_t value)
+static bool spec_cache_is_pow2(size_t value)
 {
     return value != 0 && (value & (value - 1)) == 0;
 }
 
-static uint64_t toy_spec_cache_hash_key(const uint8_t key[TOY_SPEC_KEY_SIZE])
+static uint64_t spec_cache_hash_key(const uint8_t key[TOY_SPEC_KEY_SIZE])
 {
     uint64_t hash = UINT64_C(0x9e3779b97f4a7c15);
     for (size_t offset = 0; offset < TOY_SPEC_KEY_SIZE; offset += 8) {
@@ -51,13 +51,13 @@ static uint64_t toy_spec_cache_hash_key(const uint8_t key[TOY_SPEC_KEY_SIZE])
  * Linear probing. On a hit, slot_out is the matching slot. On a miss, it is
  * the first empty slot or SIZE_MAX when the table is full.
  */
-static bool toy_spec_cache_find_locked(toy_spec_cache *cache, const uint8_t *key,
+static bool spec_cache_find_locked(spec_cache *cache, const uint8_t *key,
                                        uint64_t hash, size_t *slot_out)
 {
     size_t index = (size_t) (hash & cache->mask);
     uint64_t probes = 0;
     for (size_t i = 0; i < cache->capacity; i++) {
-        toy_spec_entry *entry = &cache->entries[index];
+        spec_entry *entry = &cache->entries[index];
         probes++;
         if (entry->filled == 0) {
             cache->stats.probe_total += probes;
@@ -86,9 +86,9 @@ static bool toy_spec_cache_find_locked(toy_spec_cache *cache, const uint8_t *key
     return false;
 }
 
-static toy_arena_block toy_spec_cache_entry_block(const toy_spec_entry *entry)
+static arena_block spec_cache_entry_block(const spec_entry *entry)
 {
-    toy_arena_block block = {
+    arena_block block = {
         .code = entry->code,
         .pages = entry->pages,
         .guard_pages = 0,
@@ -96,7 +96,7 @@ static toy_arena_block toy_spec_cache_entry_block(const toy_spec_entry *entry)
     return block;
 }
 
-toy_spec_cache *toy_spec_cache_create(toy_arena *arena, size_t capacity)
+spec_cache *spec_cache_create(arena *arena, size_t capacity)
 {
     if (arena == NULL || capacity == 0) {
         return NULL;
@@ -105,16 +105,16 @@ toy_spec_cache *toy_spec_cache_create(toy_arena *arena, size_t capacity)
     while (rounded < capacity) {
         rounded <<= 1;
     }
-    if (!toy_spec_cache_is_pow2(rounded)) {
+    if (!spec_cache_is_pow2(rounded)) {
         return NULL;
     }
 
-    toy_spec_cache *cache = calloc(1, sizeof(*cache));
+    spec_cache *cache = calloc(1, sizeof(*cache));
     if (cache == NULL) {
         return NULL;
     }
-    cache->entries = calloc(rounded, sizeof(toy_spec_entry));
-    if (cache->entries == NULL || !toy_platform_lock_init(&cache->lock)) {
+    cache->entries = calloc(rounded, sizeof(spec_entry));
+    if (cache->entries == NULL || !platform_lock_init(&cache->lock)) {
         free(cache->entries);
         free(cache);
         return NULL;
@@ -123,77 +123,77 @@ toy_spec_cache *toy_spec_cache_create(toy_arena *arena, size_t capacity)
     cache->capacity = rounded;
     cache->mask = rounded - 1;
     cache->stats.capacity = rounded;
-    cache->stats.table_bytes = rounded * sizeof(toy_spec_entry);
+    cache->stats.table_bytes = rounded * sizeof(spec_entry);
     return cache;
 }
 
-void toy_spec_cache_destroy(toy_spec_cache *cache)
+void spec_cache_destroy(spec_cache *cache)
 {
     if (cache == NULL) {
         return;
     }
-    toy_platform_lock_destroy(&cache->lock);
+    platform_lock_destroy(&cache->lock);
     free(cache->entries);
     free(cache);
 }
 
-bool toy_spec_cache_get_or_create(toy_spec_cache *cache,
+bool spec_cache_get_or_create(spec_cache *cache,
                                   const uint8_t key[TOY_SPEC_KEY_SIZE],
-                                  size_t bytes_hint, toy_spec_fill fill, void *context,
-                                  toy_arena_block *block)
+                                  size_t bytes_hint, spec_fill fill, void *context,
+                                  arena_block *block)
 {
     if (cache == NULL || key == NULL || fill == NULL || block == NULL || bytes_hint == 0) {
         return false;
     }
-    uint64_t hash = toy_spec_cache_hash_key(key);
+    uint64_t hash = spec_cache_hash_key(key);
     size_t slot = 0;
 
-    toy_platform_lock_acquire(&cache->lock);
-    bool found = toy_spec_cache_find_locked(cache, key, hash, &slot);
+    platform_lock_acquire(&cache->lock);
+    bool found = spec_cache_find_locked(cache, key, hash, &slot);
     cache->stats.lookups++;
     if (found) {
         cache->stats.hits++;
-        *block = toy_spec_cache_entry_block(&cache->entries[slot]);
-        toy_platform_lock_release(&cache->lock);
+        *block = spec_cache_entry_block(&cache->entries[slot]);
+        platform_lock_release(&cache->lock);
         return true;
     }
     cache->stats.misses++;
-    toy_platform_lock_release(&cache->lock);
+    platform_lock_release(&cache->lock);
 
-    toy_arena_block created = { 0 };
-    if (!toy_arena_alloc_bytes(cache->arena, bytes_hint, &created)) {
+    arena_block created = { 0 };
+    if (!arena_alloc_bytes(cache->arena, bytes_hint, &created)) {
         return false;
     }
-    size_t capacity_bytes = (size_t) created.pages * toy_arena_page_size(cache->arena);
+    size_t capacity_bytes = (size_t) created.pages * arena_page_size(cache->arena);
     if (!fill(key, context, created.code, capacity_bytes)) {
-        toy_platform_lock_acquire(&cache->lock);
+        platform_lock_acquire(&cache->lock);
         cache->stats.fill_failures++;
-        toy_platform_lock_release(&cache->lock);
-        toy_arena_free(cache->arena, &created);
+        platform_lock_release(&cache->lock);
+        arena_free(cache->arena, &created);
         return false;
     }
-    if (!toy_arena_seal(cache->arena, &created)) {
-        toy_arena_free(cache->arena, &created);
+    if (!arena_seal(cache->arena, &created)) {
+        arena_free(cache->arena, &created);
         return false;
     }
 
     /* Another thread can insert the same key while the fill callback runs. */
-    toy_platform_lock_acquire(&cache->lock);
-    found = toy_spec_cache_find_locked(cache, key, hash, &slot);
+    platform_lock_acquire(&cache->lock);
+    found = spec_cache_find_locked(cache, key, hash, &slot);
     if (found) {
         cache->stats.hits++;
-        *block = toy_spec_cache_entry_block(&cache->entries[slot]);
-        toy_platform_lock_release(&cache->lock);
-        toy_arena_free(cache->arena, &created);
+        *block = spec_cache_entry_block(&cache->entries[slot]);
+        platform_lock_release(&cache->lock);
+        arena_free(cache->arena, &created);
         return true;
     }
     if (cache->used == cache->capacity || slot == SIZE_MAX) {
         cache->stats.insert_failures++;
-        toy_platform_lock_release(&cache->lock);
-        toy_arena_free(cache->arena, &created);
+        platform_lock_release(&cache->lock);
+        arena_free(cache->arena, &created);
         return false;
     }
-    toy_spec_entry *entry = &cache->entries[slot];
+    spec_entry *entry = &cache->entries[slot];
     entry->hash = hash;
     memcpy(entry->key, key, TOY_SPEC_KEY_SIZE);
     entry->code = created.code;
@@ -202,51 +202,51 @@ bool toy_spec_cache_get_or_create(toy_spec_cache *cache,
     cache->used++;
     cache->stats.inserts++;
     *block = created;
-    toy_platform_lock_release(&cache->lock);
+    platform_lock_release(&cache->lock);
     return true;
 }
 
-uint8_t *toy_spec_cache_get_code(toy_spec_cache *cache,
+uint8_t *spec_cache_get_code(spec_cache *cache,
                                  const uint8_t key[TOY_SPEC_KEY_SIZE],
-                                 size_t bytes_hint, toy_spec_fill fill, void *context)
+                                 size_t bytes_hint, spec_fill fill, void *context)
 {
-    toy_arena_block block;
-    if (!toy_spec_cache_get_or_create(cache, key, bytes_hint, fill, context, &block)) {
+    arena_block block;
+    if (!spec_cache_get_or_create(cache, key, bytes_hint, fill, context, &block)) {
         return NULL;
     }
     return block.code;
 }
 
-bool toy_spec_cache_lookup(toy_spec_cache *cache, const uint8_t key[TOY_SPEC_KEY_SIZE],
-                           toy_arena_block *block)
+bool spec_cache_lookup(spec_cache *cache, const uint8_t key[TOY_SPEC_KEY_SIZE],
+                           arena_block *block)
 {
     if (cache == NULL || key == NULL || block == NULL) {
         return false;
     }
-    uint64_t hash = toy_spec_cache_hash_key(key);
+    uint64_t hash = spec_cache_hash_key(key);
     size_t slot = 0;
-    toy_platform_lock_acquire(&cache->lock);
-    bool found = toy_spec_cache_find_locked(cache, key, hash, &slot);
+    platform_lock_acquire(&cache->lock);
+    bool found = spec_cache_find_locked(cache, key, hash, &slot);
     cache->stats.lookups++;
     if (found) {
         cache->stats.hits++;
-        *block = toy_spec_cache_entry_block(&cache->entries[slot]);
+        *block = spec_cache_entry_block(&cache->entries[slot]);
     } else {
         cache->stats.misses++;
     }
-    toy_platform_lock_release(&cache->lock);
+    platform_lock_release(&cache->lock);
     return found;
 }
 
-void toy_spec_cache_get_stats(toy_spec_cache *cache, toy_spec_cache_stats *stats)
+void spec_cache_get_stats(spec_cache *cache, spec_cache_stats *stats)
 {
     if (cache == NULL || stats == NULL) {
         return;
     }
-    toy_platform_lock_acquire(&cache->lock);
+    platform_lock_acquire(&cache->lock);
     *stats = cache->stats;
     stats->used = cache->used;
     stats->capacity = cache->capacity;
-    stats->table_bytes = cache->capacity * sizeof(toy_spec_entry);
-    toy_platform_lock_release(&cache->lock);
+    stats->table_bytes = cache->capacity * sizeof(spec_entry);
+    platform_lock_release(&cache->lock);
 }

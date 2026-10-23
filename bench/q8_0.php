@@ -28,7 +28,7 @@ function make_matrix(int $rows, int $cols, int $seed): Toy\Tensor {
     for ($r = 0; $r < $rows; $r++) {
         $row = [];
         for ($c = 0; $c < $cols; $c++) {
-            $row[] = toy_test_value($r * $cols + $c, $seed);
+            $row[] = test_value($r * $cols + $c, $seed);
         }
         $bytes .= pack('g*', ...$row);
     }
@@ -38,9 +38,9 @@ function make_matrix(int $rows, int $cols, int $seed): Toy\Tensor {
 function make_vector(int $count, int $seed): Toy\Tensor {
     $values = [];
     for ($i = 0; $i < $count; $i++) {
-        $values[] = toy_test_value($i, $seed);
+        $values[] = test_value($i, $seed);
     }
-    return toy_test_tensor([$count], $values);
+    return test_tensor([$count], $values);
 }
 
 printf("PHP %s, %s\n", PHP_VERSION, Toy\Tensor\kernel_stats()['isa']);
@@ -54,19 +54,19 @@ foreach ([32, 128, 1024] as $k) {
     $n = 3;
     $wv = [];
     for ($i = 0; $i < $m * $k; $i++) {
-        $wv[] = toy_test_value($i, $k);
+        $wv[] = test_value($i, $k);
     }
     $xv = [];
     for ($i = 0; $i < $k * $n; $i++) {
-        $xv[] = toy_test_value($i, $n * 9 + 1);
+        $xv[] = test_value($i, $n * 9 + 1);
     }
-    $w = toy_test_tensor([$m, $k], $wv)->cast('q8_0');
-    $x = toy_test_tensor([$k, $n], $xv);
-    $blocks = toy_test_q8_blocks($w->toBytes());
+    $w = test_tensor([$m, $k], $wv)->cast('q8_0');
+    $x = test_tensor([$k, $n], $xv);
+    $blocks = test_q8_blocks($w->toBytes());
 
-    $got = toy_test_floats(Toy\Tensor\matmul_q8_0_f32($w, $x, $m, $n, $k));
-    [$ref, $absSums] = toy_test_q8_matmul_ref($blocks, $xv, $m, $n, $k);
-    $metrics = toy_test_q8_metrics($got, $ref, $absSums);
+    $got = test_floats(Toy\Tensor\matmul_q8_0_f32($w, $x, $m, $n, $k));
+    [$ref, $absSums] = test_q8_matmul_ref($blocks, $xv, $m, $n, $k);
+    $metrics = test_q8_metrics($got, $ref, $absSums);
     printf("%6d %10.3e %10.3e %10.3e\n",
         $k, $metrics['maxAbs'], $metrics['maxScaled'], $metrics['nmse']);
 }

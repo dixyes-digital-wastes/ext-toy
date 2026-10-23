@@ -31,19 +31,19 @@ foreach ($isas as $isa) {
     $k = 128;
     $wv = [];
     for ($i = 0; $i < $m * $k; $i++) {
-        $wv[] = toy_test_value($i, $m + $k);
+        $wv[] = test_value($i, $m + $k);
     }
     $xv = [];
     for ($i = 0; $i < $k * $n; $i++) {
-        $xv[] = toy_test_value($i, $n + 1);
+        $xv[] = test_value($i, $n + 1);
     }
-    $w = toy_test_tensor([$m, $k], $wv)->cast('q8_0');
-    $x = toy_test_tensor([$k, $n], $xv);
-    $blocks = toy_test_q8_blocks($w->toBytes());
+    $w = test_tensor([$m, $k], $wv)->cast('q8_0');
+    $x = test_tensor([$k, $n], $xv);
+    $blocks = test_q8_blocks($w->toBytes());
 
-    $got = toy_test_floats(Toy\Tensor\matmul_q8_0_f32($w, $x, $m, $n, $k));
-    [$ref, $absSums] = toy_test_q8_matmul_ref($blocks, $xv, $m, $n, $k);
-    $metrics = toy_test_q8_metrics($got, $ref, $absSums);
+    $got = test_floats(Toy\Tensor\matmul_q8_0_f32($w, $x, $m, $n, $k));
+    [$ref, $absSums] = test_q8_matmul_ref($blocks, $xv, $m, $n, $k);
+    $metrics = test_q8_metrics($got, $ref, $absSums);
     $ok = $ok && $metrics['maxScaled'] < 4e-6;
 
     $stats = Toy\Tensor\kernel_stats();

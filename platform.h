@@ -1,5 +1,5 @@
-#ifndef TOY_PLATFORM_H
-#define TOY_PLATFORM_H
+#ifndef PLATFORM_H
+#define PLATFORM_H
 
 /*
  * Small platform layer for the arena and the spec cache
@@ -20,19 +20,19 @@
 #include <unistd.h>
 #endif
 
-typedef enum toy_platform_prot {
+typedef enum platform_prot {
     TOY_PLATFORM_PROT_RW = 0,
     TOY_PLATFORM_PROT_RX = 1,
     TOY_PLATFORM_PROT_NONE = 2,
-} toy_platform_prot;
+} platform_prot;
 
 #ifdef _WIN32
-typedef SRWLOCK toy_platform_lock;
+typedef SRWLOCK platform_lock;
 #else
-typedef pthread_mutex_t toy_platform_lock;
+typedef pthread_mutex_t platform_lock;
 #endif
 
-static inline size_t toy_platform_page_size(void)
+static inline size_t platform_page_size(void)
 {
 #ifdef _WIN32
     SYSTEM_INFO info;
@@ -45,7 +45,7 @@ static inline size_t toy_platform_page_size(void)
 }
 
 /* Maps a writable, non-executable anonymous region. Returns NULL on failure. */
-static inline void *toy_platform_map(size_t bytes)
+static inline void *platform_map(size_t bytes)
 {
 #ifdef _WIN32
     return VirtualAlloc(NULL, bytes, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
@@ -59,7 +59,7 @@ static inline void *toy_platform_map(size_t bytes)
 #endif
 }
 
-static inline void toy_platform_unmap(void *address, size_t bytes)
+static inline void platform_unmap(void *address, size_t bytes)
 {
     if (address == NULL) {
         return;
@@ -72,7 +72,7 @@ static inline void toy_platform_unmap(void *address, size_t bytes)
 #endif
 }
 
-static inline bool toy_platform_protect(void *address, size_t bytes, toy_platform_prot prot)
+static inline bool platform_protect(void *address, size_t bytes, platform_prot prot)
 {
 #ifdef _WIN32
     DWORD native_prot = PAGE_NOACCESS;
@@ -94,7 +94,7 @@ static inline bool toy_platform_protect(void *address, size_t bytes, toy_platfor
 #endif
 }
 
-static inline void toy_platform_flush_icache(const void *code, size_t bytes)
+static inline void platform_flush_icache(const void *code, size_t bytes)
 {
 #ifdef _WIN32
     FlushInstructionCache(GetCurrentProcess(), code, bytes);
@@ -106,7 +106,7 @@ static inline void toy_platform_flush_icache(const void *code, size_t bytes)
 #endif
 }
 
-static inline bool toy_platform_lock_init(toy_platform_lock *lock)
+static inline bool platform_lock_init(platform_lock *lock)
 {
 #ifdef _WIN32
     InitializeSRWLock(lock);
@@ -116,7 +116,7 @@ static inline bool toy_platform_lock_init(toy_platform_lock *lock)
 #endif
 }
 
-static inline void toy_platform_lock_destroy(toy_platform_lock *lock)
+static inline void platform_lock_destroy(platform_lock *lock)
 {
 #ifdef _WIN32
     (void) lock;
@@ -125,7 +125,7 @@ static inline void toy_platform_lock_destroy(toy_platform_lock *lock)
 #endif
 }
 
-static inline void toy_platform_lock_acquire(toy_platform_lock *lock)
+static inline void platform_lock_acquire(platform_lock *lock)
 {
 #ifdef _WIN32
     AcquireSRWLockExclusive(lock);
@@ -134,7 +134,7 @@ static inline void toy_platform_lock_acquire(toy_platform_lock *lock)
 #endif
 }
 
-static inline bool toy_platform_lock_try_acquire(toy_platform_lock *lock)
+static inline bool platform_lock_try_acquire(platform_lock *lock)
 {
 #ifdef _WIN32
     return TryAcquireSRWLockExclusive(lock) != 0;
@@ -143,7 +143,7 @@ static inline bool toy_platform_lock_try_acquire(toy_platform_lock *lock)
 #endif
 }
 
-static inline void toy_platform_lock_release(toy_platform_lock *lock)
+static inline void platform_lock_release(platform_lock *lock)
 {
 #ifdef _WIN32
     ReleaseSRWLockExclusive(lock);
@@ -152,4 +152,4 @@ static inline void toy_platform_lock_release(toy_platform_lock *lock)
 #endif
 }
 
-#endif /* TOY_PLATFORM_H */
+#endif /* PLATFORM_H */

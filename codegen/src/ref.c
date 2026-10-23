@@ -21,7 +21,7 @@
 
 #include "toy/q8_0.h"
 
-void toy_ref_dot(uint32_t k, const float *x, const float *y, float *out) {
+void ref_dot(uint32_t k, const float *x, const float *y, float *out) {
     float sum = 0.0f;
     for (uint32_t p = 0; p < k; p++) {
         sum = fmaf(x[p], y[p], sum);
@@ -53,7 +53,7 @@ void ref_rmsnorm_f32(const float *x, const float *w, float *out, uint32_t n, flo
     }
 }
 
-void toy_ref_matvec(uint32_t m, uint32_t k, const float *w, const float *x, float *y) {
+void ref_matvec(uint32_t m, uint32_t k, const float *w, const float *x, float *y) {
     uint32_t i = 0;
     for (; i + 8 <= m; i += 8) {
         const float *w0 = w + (size_t)(i + 0) * k;
@@ -102,7 +102,7 @@ void toy_ref_matvec(uint32_t m, uint32_t k, const float *w, const float *x, floa
 }
 
 // 8 rows x 1 column, 8 independent accumulators
-static void toy_ref_block_8x1(uint32_t k, const float *b, uint32_t j, uint32_t n,
+static void ref_block_8x1(uint32_t k, const float *b, uint32_t j, uint32_t n,
                               const float *a0, const float *a1, const float *a2, const float *a3,
                               const float *a4, const float *a5, const float *a6, const float *a7,
                               float *c0, float *c1, float *c2, float *c3,
@@ -138,7 +138,7 @@ static void toy_ref_block_8x1(uint32_t k, const float *b, uint32_t j, uint32_t n
     *c7 = s7;
 }
 
-void toy_ref_gemm(uint32_t m, uint32_t n, uint32_t k, const float *a, const float *b, float *c) {
+void ref_gemm(uint32_t m, uint32_t n, uint32_t k, const float *a, const float *b, float *c) {
     uint32_t i0 = 0;
     for (; i0 + 8 <= m; i0 += 8) {
         const float *a0 = a + (size_t)(i0 + 0) * k;
@@ -248,7 +248,7 @@ void toy_ref_gemm(uint32_t m, uint32_t n, uint32_t k, const float *a, const floa
         }
         for (; j0 < n; j0++) {
             float *cp = c + (size_t)i0 * n + j0;
-            toy_ref_block_8x1(k, b, j0, n, a0, a1, a2, a3, a4, a5, a6, a7,
+            ref_block_8x1(k, b, j0, n, a0, a1, a2, a3, a4, a5, a6, a7,
                               cp + 0 * n, cp + 1 * n, cp + 2 * n, cp + 3 * n,
                               cp + 4 * n, cp + 5 * n, cp + 6 * n, cp + 7 * n);
         }
@@ -271,7 +271,7 @@ void toy_ref_gemm(uint32_t m, uint32_t n, uint32_t k, const float *a, const floa
 /* ---------- q8_0 ---------- */
 
 // stride is the step of x along k, 1 for dot and matvec, n for matmul
-static float toy_ref_q8_0_row(const struct toy_q8_0_block *w, uint32_t blocks,
+static float ref_q8_0_row(const struct q8_0_block *w, uint32_t blocks,
                              const float *x, uint32_t stride) {
     float acc = 0.0f;
     for (uint32_t b = 0; b < blocks; b++) {
@@ -280,12 +280,12 @@ static float toy_ref_q8_0_row(const struct toy_q8_0_block *w, uint32_t blocks,
         for (int i = 0; i < TOY_Q8_0_BLOCK; i++) {
             sum = fmaf((float)w[b].qs[i], xb[(size_t)i * stride], sum);
         }
-        acc = fmaf(toy_f16_to_f32(w[b].d), sum, acc);
+        acc = fmaf(f16_to_f32(w[b].d), sum, acc);
     }
     return acc;
 }
 
-static double toy_ref_q8_0_row_acc64(const struct toy_q8_0_block *w, uint32_t blocks,
+static double ref_q8_0_row_acc64(const struct q8_0_block *w, uint32_t blocks,
                                      const float *x, uint32_t stride) {
     double acc = 0.0;
     for (uint32_t b = 0; b < blocks; b++) {
@@ -294,54 +294,54 @@ static double toy_ref_q8_0_row_acc64(const struct toy_q8_0_block *w, uint32_t bl
         for (int i = 0; i < TOY_Q8_0_BLOCK; i++) {
             sum = fma((double)w[b].qs[i], (double)xb[(size_t)i * stride], sum);
         }
-        acc = fma((double)toy_f16_to_f32(w[b].d), sum, acc);
+        acc = fma((double)f16_to_f32(w[b].d), sum, acc);
     }
     return acc;
 }
 
-void toy_ref_q8_0_dot(uint32_t k, const void *w, const float *x, float *out) {
-    *out = toy_ref_q8_0_row(w, k / TOY_Q8_0_BLOCK, x, 1);
+void ref_q8_0_dot(uint32_t k, const void *w, const float *x, float *out) {
+    *out = ref_q8_0_row(w, k / TOY_Q8_0_BLOCK, x, 1);
 }
 
-void toy_ref_q8_0_matvec(uint32_t m, uint32_t k, const void *w, const float *x, float *y) {
+void ref_q8_0_matvec(uint32_t m, uint32_t k, const void *w, const float *x, float *y) {
     const uint32_t blocks = k / TOY_Q8_0_BLOCK;
-    const struct toy_q8_0_block *wp = w;
+    const struct q8_0_block *wp = w;
     for (uint32_t i = 0; i < m; i++) {
-        y[i] = toy_ref_q8_0_row(wp + (size_t)i * blocks, blocks, x, 1);
+        y[i] = ref_q8_0_row(wp + (size_t)i * blocks, blocks, x, 1);
     }
 }
 
-void toy_ref_q8_0_matmul(uint32_t m, uint32_t n, uint32_t k,
+void ref_q8_0_matmul(uint32_t m, uint32_t n, uint32_t k,
                          const void *w, const float *x, float *c) {
     const uint32_t blocks = k / TOY_Q8_0_BLOCK;
-    const struct toy_q8_0_block *wp = w;
+    const struct q8_0_block *wp = w;
     for (uint32_t i = 0; i < m; i++) {
         for (uint32_t j = 0; j < n; j++) {
-            c[(size_t)i * n + j] = toy_ref_q8_0_row(wp + (size_t)i * blocks, blocks, x + j, n);
+            c[(size_t)i * n + j] = ref_q8_0_row(wp + (size_t)i * blocks, blocks, x + j, n);
         }
     }
 }
 
-void toy_ref_q8_0_dot_acc64(uint32_t k, const void *w, const float *x, float *out) {
-    *out = (float)toy_ref_q8_0_row_acc64(w, k / TOY_Q8_0_BLOCK, x, 1);
+void ref_q8_0_dot_acc64(uint32_t k, const void *w, const float *x, float *out) {
+    *out = (float)ref_q8_0_row_acc64(w, k / TOY_Q8_0_BLOCK, x, 1);
 }
 
-void toy_ref_q8_0_matvec_acc64(uint32_t m, uint32_t k, const void *w, const float *x, float *y) {
+void ref_q8_0_matvec_acc64(uint32_t m, uint32_t k, const void *w, const float *x, float *y) {
     const uint32_t blocks = k / TOY_Q8_0_BLOCK;
-    const struct toy_q8_0_block *wp = w;
+    const struct q8_0_block *wp = w;
     for (uint32_t i = 0; i < m; i++) {
-        y[i] = (float)toy_ref_q8_0_row_acc64(wp + (size_t)i * blocks, blocks, x, 1);
+        y[i] = (float)ref_q8_0_row_acc64(wp + (size_t)i * blocks, blocks, x, 1);
     }
 }
 
-void toy_ref_q8_0_matmul_acc64(uint32_t m, uint32_t n, uint32_t k,
+void ref_q8_0_matmul_acc64(uint32_t m, uint32_t n, uint32_t k,
                                const void *w, const float *x, float *c) {
     const uint32_t blocks = k / TOY_Q8_0_BLOCK;
-    const struct toy_q8_0_block *wp = w;
+    const struct q8_0_block *wp = w;
     for (uint32_t i = 0; i < m; i++) {
         for (uint32_t j = 0; j < n; j++) {
             c[(size_t)i * n + j] =
-                (float)toy_ref_q8_0_row_acc64(wp + (size_t)i * blocks, blocks, x + j, n);
+                (float)ref_q8_0_row_acc64(wp + (size_t)i * blocks, blocks, x + j, n);
         }
     }
 }

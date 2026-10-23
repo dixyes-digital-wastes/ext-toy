@@ -6,8 +6,8 @@
  * sizes of 1, 2, 4 and 8 pages, so one protection change seals one block.
  */
 
-#include "toy_arena.h"
-#include "toy_platform.h"
+#include "arena.h"
+#include "platform.h"
 
 #include <assert.h>
 #include <stdalign.h>
@@ -25,32 +25,32 @@ static_assert((1u << TOY_ARENA_MAX_ALLOC_TIER) == TOY_ARENA_MAX_BLOCK_PAGES,
               "max allocation tier does not match TOY_ARENA_MAX_BLOCK_PAGES");
 
 /* page_state marks a used page or the interior of a free run */
-static const int8_t toy_arena_page_used = -1;
-static const int8_t toy_arena_page_interior = -2;
+static const int8_t arena_page_used = -1;
+static const int8_t arena_page_interior = -2;
 
-typedef struct toy_arena_counters {
+typedef struct arena_counters {
     uint64_t alloc_count;
     uint64_t free_count;
     uint64_t split_count;
     uint64_t merge_count;
     uint64_t tier_allocs[TOY_ARENA_MAX_BLOCK_PAGES];
-} toy_arena_counters;
+} arena_counters;
 
 /* A segment is one contiguous power-of-two range of pages, split as a buddy. */
-typedef struct toy_arena_segment {
+typedef struct arena_segment {
     /* Keeps the hot counters of adjacent segments on different cache lines */
-    alignas(64) toy_arena_counters counters;
+    alignas(64) arena_counters counters;
     uint32_t first_page;
     uint32_t page_count;
     uint32_t max_tier;
     int32_t free_head[TOY_ARENA_TIER_LIMIT];
     int32_t *free_next;
     int32_t *free_prev;
-    toy_platform_lock lock;
-} toy_arena_segment;
+    platform_lock lock;
+} arena_segment;
 
-struct toy_arena {
-    toy_arena_kind kind;
+struct arena {
+    arena_kind kind;
     bool coalesce;
     bool coalesce_unbounded;
     uint8_t *base;
@@ -59,17 +59,17 @@ struct toy_arena {
     uint32_t page_count;
     uint32_t segment_count;
     uint32_t pages_per_segment;
-    toy_arena_segment *segments;
+    arena_segment *segments;
     int8_t *page_state;
     uint8_t *page_prot;
     /* Protects the cold counters and the home slot counter */
-    toy_platform_lock stat_lock;
+    platform_lock stat_lock;
     uint64_t alloc_failures;
     uint64_t mprotect_calls;
     uint32_t next_home_slot;
 
     /* Guarded mode only */
-    toy_platform_lock guard_lock;
+    platform_lock guard_lock;
     uint8_t *guard_used;
     uint32_t guard_hint;
     uint64_t guarded_alloc_count;
@@ -77,15 +77,15 @@ struct toy_arena {
 };
 
 /* Remembers the home segment per thread and per arena */
-static _Thread_local toy_arena *toy_arena_home_arena;
-static _Thread_local uint32_t toy_arena_home_slot;
+static _Thread_local arena *arena_home_arena;
+static _Thread_local uint32_t arena_home_slot;
 
-static bool toy_arena_is_pow2(uint32_t value)
+static bool arena_is_pow2(uint32_t value)
 {
     return value != 0 && (value & (value - 1)) == 0;
 }
 
-static uint32_t toy_arena_floor_pow2(uint32_t value)
+static uint32_t arena_floor_pow2(uint32_t value)
 {
     uint32_t result = 1;
     while (result <= value / 2) {
@@ -94,9 +94,9 @@ static uint32_t toy_arena_floor_pow2(uint32_t value)
     return result;
 }
 
-static uint32_t toy_arena_tier_of_pow2(uint32_t pages)
+static uint32_t arena_tier_of_pow2(uint32_t pages)
 {
-    assert(toy_arena_is_pow2(pages));
+    assert(arena_is_pow2(pages));
     uint32_t tier = 0;
     while ((UINT32_C(1) << tier) != pages) {
         tier++;
@@ -104,19 +104,19 @@ static uint32_t toy_arena_tier_of_pow2(uint32_t pages)
     return tier;
 }
 
-static bool toy_arena_block_pages_valid(uint32_t pages)
+static bool arena_block_pages_valid(uint32_t pages)
 {
-    return pages >= 1 && pages <= TOY_ARENA_MAX_BLOCK_PAGES && toy_arena_is_pow2(pages);
+    return pages >= 1 && pages <= TOY_ARENA_MAX_BLOCK_PAGES && arena_is_pow2(pages);
 }
 
-static void toy_arena_bump_mprotect(toy_arena *arena)
+static void arena_bump_mprotect(arena *arena)
 {
-    toy_platform_lock_acquire(&arena->stat_lock);
+    platform_lock_acquire(&arena->stat_lock);
     arena->mprotect_calls++;
-    toy_platform_lock_release(&arena->stat_lock);
+    platform_lock_release(&arena->stat_lock);
 }
 
-static void toy_arena_segment_push_run(toy_arena *arena, toy_arena_segment *segment,
+static void arena_segment_push_run(arena *arena, arena_segment *segment,
                                        uint32_t local, uint32_t tier)
 {
     assert(tier <= segment->max_tier);
@@ -125,7 +125,7 @@ static void toy_arena_segment_push_run(toy_arena *arena, toy_arena_segment *segm
 
     int8_t *state = arena->page_state + segment->first_page;
     for (uint32_t i = 0; i < pages; i++) {
-        state[local + i] = toy_arena_page_interior;
+        state[local + i] = arena_page_interior;
     }
     state[local] = (int8_t) tier;
 
@@ -138,7 +138,7 @@ static void toy_arena_segment_push_run(toy_arena *arena, toy_arena_segment *segm
     segment->free_head[tier] = (int32_t) local;
 }
 
-static uint32_t toy_arena_segment_pop_run(toy_arena *arena, toy_arena_segment *segment,
+static uint32_t arena_segment_pop_run(arena *arena, arena_segment *segment,
                                           uint32_t tier)
 {
     int32_t run = segment->free_head[tier];
@@ -156,12 +156,12 @@ static uint32_t toy_arena_segment_pop_run(toy_arena *arena, toy_arena_segment *s
     int8_t *state = arena->page_state + segment->first_page;
     uint32_t pages = UINT32_C(1) << tier;
     for (uint32_t i = 0; i < pages; i++) {
-        state[run + i] = toy_arena_page_used;
+        state[run + i] = arena_page_used;
     }
     return (uint32_t) run;
 }
 
-static void toy_arena_segment_unlink_run(toy_arena_segment *segment, uint32_t local, uint32_t tier)
+static void arena_segment_unlink_run(arena_segment *segment, uint32_t local, uint32_t tier)
 {
     int32_t prev = segment->free_prev[local];
     int32_t next = segment->free_next[local];
@@ -177,7 +177,7 @@ static void toy_arena_segment_unlink_run(toy_arena_segment *segment, uint32_t lo
     segment->free_prev[local] = -1;
 }
 
-static bool toy_arena_segment_alloc_run(toy_arena *arena, toy_arena_segment *segment,
+static bool arena_segment_alloc_run(arena *arena, arena_segment *segment,
                                         uint32_t wanted_tier, uint32_t *local_out)
 {
     uint32_t tier = wanted_tier;
@@ -188,11 +188,11 @@ static bool toy_arena_segment_alloc_run(toy_arena *arena, toy_arena_segment *seg
         return false;
     }
 
-    uint32_t run = toy_arena_segment_pop_run(arena, segment, tier);
+    uint32_t run = arena_segment_pop_run(arena, segment, tier);
     assert(run != UINT32_MAX);
     while (tier > wanted_tier) {
         tier--;
-        toy_arena_segment_push_run(arena, segment, run + (UINT32_C(1) << tier), tier);
+        arena_segment_push_run(arena, segment, run + (UINT32_C(1) << tier), tier);
         segment->counters.split_count++;
     }
     segment->counters.tier_allocs[wanted_tier]++;
@@ -201,7 +201,7 @@ static bool toy_arena_segment_alloc_run(toy_arena *arena, toy_arena_segment *seg
     return true;
 }
 
-static void toy_arena_segment_free_run(toy_arena *arena, toy_arena_segment *segment,
+static void arena_segment_free_run(arena *arena, arena_segment *segment,
                                        uint32_t local, uint32_t tier)
 {
     /*
@@ -217,7 +217,7 @@ static void toy_arena_segment_free_run(toy_arena *arena, toy_arena_segment *segm
         if (arena->page_state[segment->first_page + buddy] != (int8_t) tier) {
             break;
         }
-        toy_arena_segment_unlink_run(segment, buddy, tier);
+        arena_segment_unlink_run(segment, buddy, tier);
         if (buddy < local) {
             local = buddy;
         }
@@ -225,10 +225,10 @@ static void toy_arena_segment_free_run(toy_arena *arena, toy_arena_segment *segm
         segment->counters.merge_count++;
     }
     segment->counters.free_count++;
-    toy_arena_segment_push_run(arena, segment, local, tier);
+    arena_segment_push_run(arena, segment, local, tier);
 }
 
-static bool toy_arena_guarded_scan_from(toy_arena *arena, uint32_t from, uint32_t span,
+static bool arena_guarded_scan_from(arena *arena, uint32_t from, uint32_t span,
                                         uint32_t *start_out)
 {
     uint32_t run = 0;
@@ -247,40 +247,40 @@ static bool toy_arena_guarded_scan_from(toy_arena *arena, uint32_t from, uint32_
 }
 
 /* A block is contiguous, so a free run cannot cross the end of the arena. */
-static bool toy_arena_guarded_find_run(toy_arena *arena, uint32_t span, uint32_t *start_out)
+static bool arena_guarded_find_run(arena *arena, uint32_t span, uint32_t *start_out)
 {
     if (arena->guard_hint + span <= arena->page_count &&
-        toy_arena_guarded_scan_from(arena, arena->guard_hint, span, start_out)) {
+        arena_guarded_scan_from(arena, arena->guard_hint, span, start_out)) {
         return true;
     }
-    if (arena->guard_hint != 0 && toy_arena_guarded_scan_from(arena, 0, span, start_out)) {
+    if (arena->guard_hint != 0 && arena_guarded_scan_from(arena, 0, span, start_out)) {
         return true;
     }
     return false;
 }
 
-static void toy_arena_guarded_mark(toy_arena *arena, uint32_t start, uint32_t span, uint8_t value)
+static void arena_guarded_mark(arena *arena, uint32_t start, uint32_t span, uint8_t value)
 {
     for (uint32_t i = 0; i < span; i++) {
         arena->guard_used[start + i] = value;
     }
 }
 
-static uint32_t toy_arena_pick_home_segment(toy_arena *arena)
+static uint32_t arena_pick_home_segment(arena *arena)
 {
-    if (toy_arena_home_arena != arena) {
-        toy_platform_lock_acquire(&arena->stat_lock);
+    if (arena_home_arena != arena) {
+        platform_lock_acquire(&arena->stat_lock);
         uint32_t slot = arena->next_home_slot++;
-        toy_platform_lock_release(&arena->stat_lock);
-        toy_arena_home_arena = arena;
-        toy_arena_home_slot = slot;
+        platform_lock_release(&arena->stat_lock);
+        arena_home_arena = arena;
+        arena_home_slot = slot;
     }
-    return toy_arena_home_slot % arena->segment_count;
+    return arena_home_slot % arena->segment_count;
 }
 
-toy_arena_config toy_arena_default_config(void)
+arena_config arena_default_config(void)
 {
-    toy_arena_config config = {
+    arena_config config = {
         .total_bytes = (size_t) TOY_ARENA_DEFAULT_BYTES,
         .kind = TOY_ARENA_TIERED,
         .segment_count = 8,
@@ -290,14 +290,14 @@ toy_arena_config toy_arena_default_config(void)
     return config;
 }
 
-toy_arena *toy_arena_create(const toy_arena_config *config)
+arena *arena_create(const arena_config *config)
 {
-    toy_arena_config cfg = config != NULL ? *config : toy_arena_default_config();
+    arena_config cfg = config != NULL ? *config : arena_default_config();
     if (cfg.total_bytes == 0) {
         cfg.total_bytes = (size_t) TOY_ARENA_DEFAULT_BYTES;
     }
 
-    size_t page_size = toy_platform_page_size();
+    size_t page_size = platform_page_size();
     if (page_size == 0) {
         return NULL;
     }
@@ -308,7 +308,7 @@ toy_arena *toy_arena_create(const toy_arena_config *config)
     }
     uint32_t page_count = (uint32_t) requested_pages;
 
-    toy_arena_kind kind = cfg.kind;
+    arena_kind kind = cfg.kind;
     uint32_t segment_count = 0;
     uint32_t pages_per_segment = 0;
     uint32_t usable_pages;
@@ -316,9 +316,9 @@ toy_arena *toy_arena_create(const toy_arena_config *config)
         usable_pages = page_count;
     } else {
         kind = TOY_ARENA_TIERED;
-        usable_pages = toy_arena_floor_pow2(page_count);
+        usable_pages = arena_floor_pow2(page_count);
         uint32_t asked_segments = cfg.segment_count != 0 ? cfg.segment_count : 1;
-        if (!toy_arena_is_pow2(asked_segments)) {
+        if (!arena_is_pow2(asked_segments)) {
             return NULL;
         }
         /*
@@ -331,20 +331,20 @@ toy_arena *toy_arena_create(const toy_arena_config *config)
         }
         segment_count = asked_segments < segment_limit ? asked_segments : segment_limit;
         pages_per_segment = usable_pages / segment_count;
-        if (!toy_arena_is_pow2(pages_per_segment)) {
+        if (!arena_is_pow2(pages_per_segment)) {
             return NULL;
         }
     }
 
     size_t map_bytes = (size_t) usable_pages * page_size;
-    void *base = toy_platform_map(map_bytes);
+    void *base = platform_map(map_bytes);
     if (base == NULL) {
         return NULL;
     }
 
-    toy_arena *arena = calloc(1, sizeof(*arena));
+    arena *arena = calloc(1, sizeof(*arena));
     if (arena == NULL) {
-        toy_platform_unmap(base, map_bytes);
+        platform_unmap(base, map_bytes);
         return NULL;
     }
     arena->kind = kind;
@@ -359,13 +359,13 @@ toy_arena *toy_arena_create(const toy_arena_config *config)
 
     arena->page_prot = calloc(usable_pages, sizeof(uint8_t));
     if (arena->page_prot == NULL) {
-        toy_platform_unmap(base, map_bytes);
+        platform_unmap(base, map_bytes);
         free(arena);
         return NULL;
     }
-    if (!toy_platform_lock_init(&arena->stat_lock)) {
+    if (!platform_lock_init(&arena->stat_lock)) {
         free(arena->page_prot);
-        toy_platform_unmap(base, map_bytes);
+        platform_unmap(base, map_bytes);
         free(arena);
         return NULL;
     }
@@ -373,11 +373,11 @@ toy_arena *toy_arena_create(const toy_arena_config *config)
     if (kind == TOY_ARENA_GUARDED) {
         arena->guard_used = calloc(usable_pages, sizeof(uint8_t));
         if (arena->guard_used == NULL ||
-            !toy_platform_lock_init(&arena->guard_lock)) {
+            !platform_lock_init(&arena->guard_lock)) {
             free(arena->guard_used);
-            toy_platform_lock_destroy(&arena->stat_lock);
+            platform_lock_destroy(&arena->stat_lock);
             free(arena->page_prot);
-            toy_platform_unmap(base, map_bytes);
+            platform_unmap(base, map_bytes);
             free(arena);
             return NULL;
         }
@@ -385,13 +385,13 @@ toy_arena *toy_arena_create(const toy_arena_config *config)
     }
 
     arena->page_state = malloc((size_t) usable_pages * sizeof(int8_t));
-    arena->segments = calloc(segment_count, sizeof(toy_arena_segment));
+    arena->segments = calloc(segment_count, sizeof(arena_segment));
     if (arena->page_state == NULL || arena->segments == NULL) {
         free(arena->segments);
         free(arena->page_state);
-        toy_platform_lock_destroy(&arena->stat_lock);
+        platform_lock_destroy(&arena->stat_lock);
         free(arena->page_prot);
-        toy_platform_unmap(base, map_bytes);
+        platform_unmap(base, map_bytes);
         free(arena);
         return NULL;
     }
@@ -399,17 +399,17 @@ toy_arena *toy_arena_create(const toy_arena_config *config)
     bool init_ok = true;
     uint32_t inited_segments = 0;
     for (uint32_t s = 0; s < segment_count && init_ok; s++) {
-        toy_arena_segment *segment = &arena->segments[s];
+        arena_segment *segment = &arena->segments[s];
         segment->first_page = s * pages_per_segment;
         segment->page_count = pages_per_segment;
-        segment->max_tier = toy_arena_tier_of_pow2(pages_per_segment);
+        segment->max_tier = arena_tier_of_pow2(pages_per_segment);
         for (size_t t = 0; t < TOY_ARENA_TIER_LIMIT; t++) {
             segment->free_head[t] = -1;
         }
         segment->free_next = malloc((size_t) pages_per_segment * sizeof(int32_t));
         segment->free_prev = malloc((size_t) pages_per_segment * sizeof(int32_t));
         if (segment->free_next == NULL || segment->free_prev == NULL ||
-            !toy_platform_lock_init(&segment->lock)) {
+            !platform_lock_init(&segment->lock)) {
             init_ok = false;
             break;
         }
@@ -418,7 +418,7 @@ toy_arena *toy_arena_create(const toy_arena_config *config)
             segment->free_prev[i] = -1;
         }
         inited_segments++;
-        toy_arena_segment_push_run(arena, segment, 0, segment->max_tier);
+        arena_segment_push_run(arena, segment, 0, segment->max_tier);
     }
 
     if (!init_ok) {
@@ -427,54 +427,54 @@ toy_arena *toy_arena_create(const toy_arena_config *config)
             free(arena->segments[s].free_prev);
         }
         for (uint32_t s = 0; s < inited_segments; s++) {
-            toy_platform_lock_destroy(&arena->segments[s].lock);
+            platform_lock_destroy(&arena->segments[s].lock);
         }
         free(arena->segments);
         free(arena->page_state);
-        toy_platform_lock_destroy(&arena->stat_lock);
+        platform_lock_destroy(&arena->stat_lock);
         free(arena->page_prot);
-        toy_platform_unmap(base, map_bytes);
+        platform_unmap(base, map_bytes);
         free(arena);
         return NULL;
     }
     return arena;
 }
 
-void toy_arena_destroy(toy_arena *arena)
+void arena_destroy(arena *arena)
 {
     if (arena == NULL) {
         return;
     }
     if (arena->kind == TOY_ARENA_GUARDED) {
-        toy_platform_lock_destroy(&arena->guard_lock);
+        platform_lock_destroy(&arena->guard_lock);
         free(arena->guard_used);
     } else {
         for (uint32_t s = 0; s < arena->segment_count; s++) {
-            toy_arena_segment *segment = &arena->segments[s];
-            toy_platform_lock_destroy(&segment->lock);
+            arena_segment *segment = &arena->segments[s];
+            platform_lock_destroy(&segment->lock);
             free(segment->free_next);
             free(segment->free_prev);
         }
         free(arena->segments);
         free(arena->page_state);
     }
-    toy_platform_lock_destroy(&arena->stat_lock);
+    platform_lock_destroy(&arena->stat_lock);
     free(arena->page_prot);
-    toy_platform_unmap(arena->base, arena->map_bytes);
+    platform_unmap(arena->base, arena->map_bytes);
     free(arena);
 }
 
-size_t toy_arena_page_size(const toy_arena *arena)
+size_t arena_page_size(const arena *arena)
 {
     return arena != NULL ? arena->page_size : 0;
 }
 
-size_t toy_arena_usable_bytes(const toy_arena *arena)
+size_t arena_usable_bytes(const arena *arena)
 {
     return arena != NULL ? (size_t) arena->page_count * arena->page_size : 0;
 }
 
-toy_arena_kind toy_arena_kind_of(const toy_arena *arena)
+arena_kind arena_kind_of(const arena *arena)
 {
     return arena != NULL ? arena->kind : TOY_ARENA_TIERED;
 }
@@ -483,8 +483,8 @@ toy_arena_kind toy_arena_kind_of(const toy_arena *arena)
  * Switches contiguous pages to the target protection. The page table records
  * the current state, so an unchanged state costs no system call.
  */
-static bool toy_arena_protect(toy_arena *arena, uint32_t first_page, uint32_t pages,
-                              toy_platform_prot prot)
+static bool arena_protect(arena *arena, uint32_t first_page, uint32_t pages,
+                              platform_prot prot)
 {
     uint8_t stored_prot = (uint8_t) prot;
     bool need = false;
@@ -497,27 +497,27 @@ static bool toy_arena_protect(toy_arena *arena, uint32_t first_page, uint32_t pa
     if (!need) {
         return true;
     }
-    if (!toy_platform_protect(arena->base + (size_t) first_page * arena->page_size,
+    if (!platform_protect(arena->base + (size_t) first_page * arena->page_size,
                               (size_t) pages * arena->page_size, prot)) {
         return false;
     }
     for (uint32_t i = 0; i < pages; i++) {
         arena->page_prot[first_page + i] = stored_prot;
     }
-    toy_arena_bump_mprotect(arena);
+    arena_bump_mprotect(arena);
     return true;
 }
 
-static bool toy_arena_tiered_alloc(toy_arena *arena, uint32_t pages, toy_arena_block *block)
+static bool arena_tiered_alloc(arena *arena, uint32_t pages, arena_block *block)
 {
-    uint32_t tier = toy_arena_tier_of_pow2(pages);
-    uint32_t home = toy_arena_pick_home_segment(arena);
+    uint32_t tier = arena_tier_of_pow2(pages);
+    uint32_t home = arena_pick_home_segment(arena);
     uint32_t chosen = UINT32_MAX;
     uint32_t local = 0;
 
-    toy_platform_lock_acquire(&arena->segments[home].lock);
-    bool ok = toy_arena_segment_alloc_run(arena, &arena->segments[home], tier, &local);
-    toy_platform_lock_release(&arena->segments[home].lock);
+    platform_lock_acquire(&arena->segments[home].lock);
+    bool ok = arena_segment_alloc_run(arena, &arena->segments[home], tier, &local);
+    platform_lock_release(&arena->segments[home].lock);
     if (ok) {
         chosen = home;
     }
@@ -527,12 +527,12 @@ static bool toy_arena_tiered_alloc(toy_arena *arena, uint32_t pages, toy_arena_b
         if (i == home) {
             continue;
         }
-        toy_arena_segment *segment = &arena->segments[i];
-        if (!toy_platform_lock_try_acquire(&segment->lock)) {
+        arena_segment *segment = &arena->segments[i];
+        if (!platform_lock_try_acquire(&segment->lock)) {
             continue;
         }
-        ok = toy_arena_segment_alloc_run(arena, segment, tier, &local);
-        toy_platform_lock_release(&segment->lock);
+        ok = arena_segment_alloc_run(arena, segment, tier, &local);
+        platform_lock_release(&segment->lock);
         if (ok) {
             chosen = i;
         }
@@ -540,9 +540,9 @@ static bool toy_arena_tiered_alloc(toy_arena *arena, uint32_t pages, toy_arena_b
 
     /* Retry the home segment once, in case another thread released a run */
     if (!ok) {
-        toy_platform_lock_acquire(&arena->segments[home].lock);
-        ok = toy_arena_segment_alloc_run(arena, &arena->segments[home], tier, &local);
-        toy_platform_lock_release(&arena->segments[home].lock);
+        platform_lock_acquire(&arena->segments[home].lock);
+        ok = arena_segment_alloc_run(arena, &arena->segments[home], tier, &local);
+        platform_lock_release(&arena->segments[home].lock);
         if (ok) {
             chosen = home;
         }
@@ -556,70 +556,70 @@ static bool toy_arena_tiered_alloc(toy_arena *arena, uint32_t pages, toy_arena_b
     block->pages = pages;
     block->guard_pages = 0;
     /* A reused block can still be RX. Switch it back to RW first. */
-    if (!toy_arena_protect(arena, (uint32_t) first_page, pages, TOY_PLATFORM_PROT_RW)) {
-        toy_arena_free(arena, block);
+    if (!arena_protect(arena, (uint32_t) first_page, pages, TOY_PLATFORM_PROT_RW)) {
+        arena_free(arena, block);
         return false;
     }
     return true;
 }
 
-static bool toy_arena_guarded_alloc(toy_arena *arena, uint32_t pages, toy_arena_block *block)
+static bool arena_guarded_alloc(arena *arena, uint32_t pages, arena_block *block)
 {
     uint32_t span = pages + 1;
     uint32_t start = 0;
 
-    toy_platform_lock_acquire(&arena->guard_lock);
-    bool ok = toy_arena_guarded_find_run(arena, span, &start);
+    platform_lock_acquire(&arena->guard_lock);
+    bool ok = arena_guarded_find_run(arena, span, &start);
     if (ok) {
-        toy_arena_guarded_mark(arena, start, span, 1);
+        arena_guarded_mark(arena, start, span, 1);
         arena->guard_hint = start + span;
         if (arena->guard_hint >= arena->page_count) {
             arena->guard_hint = 0;
         }
         arena->guarded_alloc_count++;
     }
-    toy_platform_lock_release(&arena->guard_lock);
+    platform_lock_release(&arena->guard_lock);
     if (!ok) {
         return false;
     }
 
     uint8_t *code = arena->base + (size_t) start * arena->page_size;
     uint8_t *guard = code + (size_t) pages * arena->page_size;
-    if (!toy_arena_protect(arena, start, pages, TOY_PLATFORM_PROT_RW)) {
+    if (!arena_protect(arena, start, pages, TOY_PLATFORM_PROT_RW)) {
         goto rollback;
     }
-    if (!toy_platform_protect(guard, arena->page_size, TOY_PLATFORM_PROT_NONE)) {
+    if (!platform_protect(guard, arena->page_size, TOY_PLATFORM_PROT_NONE)) {
         goto rollback;
     }
     arena->page_prot[start + pages] = (uint8_t) TOY_PLATFORM_PROT_NONE;
-    toy_arena_bump_mprotect(arena);
+    arena_bump_mprotect(arena);
     block->code = code;
     block->pages = pages;
     block->guard_pages = 1;
     return true;
 
 rollback:
-    toy_platform_lock_acquire(&arena->guard_lock);
-    toy_arena_guarded_mark(arena, start, span, 0);
-    toy_platform_lock_release(&arena->guard_lock);
+    platform_lock_acquire(&arena->guard_lock);
+    arena_guarded_mark(arena, start, span, 0);
+    platform_lock_release(&arena->guard_lock);
     return false;
 }
 
-bool toy_arena_alloc(toy_arena *arena, uint32_t pages, toy_arena_block *block)
+bool arena_alloc(arena *arena, uint32_t pages, arena_block *block)
 {
-    if (arena == NULL || block == NULL || !toy_arena_block_pages_valid(pages)) {
+    if (arena == NULL || block == NULL || !arena_block_pages_valid(pages)) {
         return false;
     }
     bool ok;
     if (arena->kind == TOY_ARENA_GUARDED) {
-        ok = toy_arena_guarded_alloc(arena, pages, block);
+        ok = arena_guarded_alloc(arena, pages, block);
     } else {
-        ok = toy_arena_tiered_alloc(arena, pages, block);
+        ok = arena_tiered_alloc(arena, pages, block);
     }
     if (!ok) {
-        toy_platform_lock_acquire(&arena->stat_lock);
+        platform_lock_acquire(&arena->stat_lock);
         arena->alloc_failures++;
-        toy_platform_lock_release(&arena->stat_lock);
+        platform_lock_release(&arena->stat_lock);
         block->code = NULL;
         block->pages = 0;
         block->guard_pages = 0;
@@ -627,7 +627,7 @@ bool toy_arena_alloc(toy_arena *arena, uint32_t pages, toy_arena_block *block)
     return ok;
 }
 
-bool toy_arena_alloc_bytes(toy_arena *arena, size_t bytes, toy_arena_block *block)
+bool arena_alloc_bytes(arena *arena, size_t bytes, arena_block *block)
 {
     if (arena == NULL || block == NULL || bytes == 0) {
         return false;
@@ -645,10 +645,10 @@ bool toy_arena_alloc_bytes(toy_arena *arena, size_t bytes, toy_arena_block *bloc
     while (tier_pages < pages) {
         tier_pages <<= 1;
     }
-    return toy_arena_alloc(arena, (uint32_t) tier_pages, block);
+    return arena_alloc(arena, (uint32_t) tier_pages, block);
 }
 
-static bool toy_arena_locate_block(const toy_arena *arena, const toy_arena_block *block,
+static bool arena_locate_block(const arena *arena, const arena_block *block,
                                    uint32_t *first_page_out, uint32_t *span_out)
 {
     if (block->code == NULL || block->pages == 0 ||
@@ -674,75 +674,75 @@ static bool toy_arena_locate_block(const toy_arena *arena, const toy_arena_block
     return true;
 }
 
-void toy_arena_free(toy_arena *arena, toy_arena_block *block)
+void arena_free(arena *arena, arena_block *block)
 {
     if (arena == NULL || block == NULL || block->code == NULL) {
         return;
     }
     uint32_t first_page = 0;
     uint32_t span = 0;
-    if (!toy_arena_locate_block(arena, block, &first_page, &span)) {
-        fprintf(stderr, "toy_arena_free: block outside arena\n");
+    if (!arena_locate_block(arena, block, &first_page, &span)) {
+        fprintf(stderr, "arena_free: block outside arena\n");
         abort();
     }
-    if (!toy_arena_block_pages_valid(block->pages)) {
-        fprintf(stderr, "toy_arena_free: invalid page count\n");
+    if (!arena_block_pages_valid(block->pages)) {
+        fprintf(stderr, "arena_free: invalid page count\n");
         abort();
     }
 
     if (arena->kind == TOY_ARENA_GUARDED) {
-        toy_platform_lock_acquire(&arena->guard_lock);
+        platform_lock_acquire(&arena->guard_lock);
         if (arena->guard_used[first_page] == 0) {
-            toy_platform_lock_release(&arena->guard_lock);
-            fprintf(stderr, "toy_arena_free: double free\n");
+            platform_lock_release(&arena->guard_lock);
+            fprintf(stderr, "arena_free: double free\n");
             abort();
         }
-        toy_arena_guarded_mark(arena, first_page, span, 0);
+        arena_guarded_mark(arena, first_page, span, 0);
         arena->guarded_free_count++;
-        toy_platform_lock_release(&arena->guard_lock);
+        platform_lock_release(&arena->guard_lock);
     } else {
-        uint32_t tier = toy_arena_tier_of_pow2(block->pages);
+        uint32_t tier = arena_tier_of_pow2(block->pages);
         uint32_t segment_index = first_page / arena->pages_per_segment;
-        toy_arena_segment *segment = &arena->segments[segment_index];
+        arena_segment *segment = &arena->segments[segment_index];
         uint32_t local = first_page - segment->first_page;
         if ((local & ((UINT32_C(1) << tier) - 1)) != 0 ||
-            arena->page_state[first_page] != toy_arena_page_used) {
-            fprintf(stderr, "toy_arena_free: invalid or double free\n");
+            arena->page_state[first_page] != arena_page_used) {
+            fprintf(stderr, "arena_free: invalid or double free\n");
             abort();
         }
-        toy_platform_lock_acquire(&segment->lock);
-        toy_arena_segment_free_run(arena, segment, local, tier);
-        toy_platform_lock_release(&segment->lock);
+        platform_lock_acquire(&segment->lock);
+        arena_segment_free_run(arena, segment, local, tier);
+        platform_lock_release(&segment->lock);
     }
     block->code = NULL;
     block->pages = 0;
     block->guard_pages = 0;
 }
 
-bool toy_arena_seal(toy_arena *arena, const toy_arena_block *block)
+bool arena_seal(arena *arena, const arena_block *block)
 {
     uint32_t first_page = 0;
     uint32_t span = 0;
-    if (arena == NULL || block == NULL || !toy_arena_block_pages_valid(block->pages) ||
-        !toy_arena_locate_block(arena, block, &first_page, &span)) {
+    if (arena == NULL || block == NULL || !arena_block_pages_valid(block->pages) ||
+        !arena_locate_block(arena, block, &first_page, &span)) {
         return false;
     }
-    toy_platform_flush_icache(block->code, (size_t) block->pages * arena->page_size);
-    return toy_arena_protect(arena, first_page, block->pages, TOY_PLATFORM_PROT_RX);
+    platform_flush_icache(block->code, (size_t) block->pages * arena->page_size);
+    return arena_protect(arena, first_page, block->pages, TOY_PLATFORM_PROT_RX);
 }
 
-bool toy_arena_unseal(toy_arena *arena, const toy_arena_block *block)
+bool arena_unseal(arena *arena, const arena_block *block)
 {
     uint32_t first_page = 0;
     uint32_t span = 0;
-    if (arena == NULL || block == NULL || !toy_arena_block_pages_valid(block->pages) ||
-        !toy_arena_locate_block(arena, block, &first_page, &span)) {
+    if (arena == NULL || block == NULL || !arena_block_pages_valid(block->pages) ||
+        !arena_locate_block(arena, block, &first_page, &span)) {
         return false;
     }
-    return toy_arena_protect(arena, first_page, block->pages, TOY_PLATFORM_PROT_RW);
+    return arena_protect(arena, first_page, block->pages, TOY_PLATFORM_PROT_RW);
 }
 
-void toy_arena_get_stats(toy_arena *arena, toy_arena_stats *stats)
+void arena_get_stats(arena *arena, arena_stats *stats)
 {
     if (arena == NULL || stats == NULL) {
         return;
@@ -752,7 +752,7 @@ void toy_arena_get_stats(toy_arena *arena, toy_arena_stats *stats)
     stats->total_pages = arena->page_count;
 
     if (arena->kind == TOY_ARENA_GUARDED) {
-        toy_platform_lock_acquire(&arena->guard_lock);
+        platform_lock_acquire(&arena->guard_lock);
         stats->alloc_calls = arena->guarded_alloc_count;
         stats->free_calls = arena->guarded_free_count;
         uint64_t used = 0;
@@ -775,20 +775,20 @@ void toy_arena_get_stats(toy_arena *arena, toy_arena_stats *stats)
             }
         }
         stats->largest_free_run_pages = best;
-        toy_platform_lock_release(&arena->guard_lock);
+        platform_lock_release(&arena->guard_lock);
 
-        toy_platform_lock_acquire(&arena->stat_lock);
+        platform_lock_acquire(&arena->stat_lock);
         stats->alloc_failures = arena->alloc_failures;
         stats->mprotect_calls = arena->mprotect_calls;
-        toy_platform_lock_release(&arena->stat_lock);
+        platform_lock_release(&arena->stat_lock);
         return;
     }
 
     uint64_t used = 0;
     uint64_t most_free_pages = 0;
     for (uint32_t s = 0; s < arena->segment_count; s++) {
-        toy_arena_segment *segment = &arena->segments[s];
-        toy_platform_lock_acquire(&segment->lock);
+        arena_segment *segment = &arena->segments[s];
+        platform_lock_acquire(&segment->lock);
         stats->alloc_calls += segment->counters.alloc_count;
         stats->free_calls += segment->counters.free_count;
         stats->split_count += segment->counters.split_count;
@@ -797,7 +797,7 @@ void toy_arena_get_stats(toy_arena *arena, toy_arena_stats *stats)
             stats->tier_allocs[i] += segment->counters.tier_allocs[i];
         }
         for (uint32_t i = 0; i < segment->page_count; i++) {
-            used += arena->page_state[segment->first_page + i] == toy_arena_page_used ? 1 : 0;
+            used += arena->page_state[segment->first_page + i] == arena_page_used ? 1 : 0;
         }
         for (uint32_t tier = 0; tier <= segment->max_tier; tier++) {
             int32_t node = segment->free_head[tier];
@@ -815,14 +815,14 @@ void toy_arena_get_stats(toy_arena *arena, toy_arena_stats *stats)
                 most_free_pages = tier_pages;
             }
         }
-        toy_platform_lock_release(&segment->lock);
+        platform_lock_release(&segment->lock);
     }
     stats->used_pages = used;
     stats->free_pages = arena->page_count - used;
     stats->largest_free_run_pages = most_free_pages;
 
-    toy_platform_lock_acquire(&arena->stat_lock);
+    platform_lock_acquire(&arena->stat_lock);
     stats->alloc_failures = arena->alloc_failures;
     stats->mprotect_calls = arena->mprotect_calls;
-    toy_platform_lock_release(&arena->stat_lock);
+    platform_lock_release(&arena->stat_lock);
 }

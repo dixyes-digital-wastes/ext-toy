@@ -15,10 +15,10 @@ extern "C" {
  * generated kernels
  */
 
-void toy_ref_gemm(uint32_t m, uint32_t n, uint32_t k,
+void ref_gemm(uint32_t m, uint32_t n, uint32_t k,
                   const float *a, const float *b, float *c);
-void toy_ref_matvec(uint32_t m, uint32_t k, const float *w, const float *x, float *y);
-void toy_ref_dot(uint32_t k, const float *x, const float *y, float *out);
+void ref_matvec(uint32_t m, uint32_t k, const float *w, const float *x, float *y);
+void ref_dot(uint32_t k, const float *x, const float *y, float *out);
 
 void ref_add_f32(const float *a, const float *b, float *c, size_t count);
 void ref_scale_f32(const float *a, float factor, float *c, size_t count);
@@ -30,14 +30,14 @@ void ref_rmsnorm_f32(const float *x, const float *w, float *out, uint32_t n, flo
  * The _acc64 versions use double for the block sum and the output sum, for
  * accuracy comparison
  */
-void toy_ref_q8_0_dot(uint32_t k, const void *w, const float *x, float *out);
-void toy_ref_q8_0_matvec(uint32_t m, uint32_t k, const void *w, const float *x, float *y);
-void toy_ref_q8_0_matmul(uint32_t m, uint32_t n, uint32_t k,
+void ref_q8_0_dot(uint32_t k, const void *w, const float *x, float *out);
+void ref_q8_0_matvec(uint32_t m, uint32_t k, const void *w, const float *x, float *y);
+void ref_q8_0_matmul(uint32_t m, uint32_t n, uint32_t k,
                          const void *w, const float *x, float *c);
 
-void toy_ref_q8_0_dot_acc64(uint32_t k, const void *w, const float *x, float *out);
-void toy_ref_q8_0_matvec_acc64(uint32_t m, uint32_t k, const void *w, const float *x, float *y);
-void toy_ref_q8_0_matmul_acc64(uint32_t m, uint32_t n, uint32_t k,
+void ref_q8_0_dot_acc64(uint32_t k, const void *w, const float *x, float *out);
+void ref_q8_0_matvec_acc64(uint32_t m, uint32_t k, const void *w, const float *x, float *y);
+void ref_q8_0_matmul_acc64(uint32_t m, uint32_t n, uint32_t k,
                                const void *w, const float *x, float *c);
 
 #ifdef __cplusplus

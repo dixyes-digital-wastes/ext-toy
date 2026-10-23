@@ -4,11 +4,11 @@
  *
  * Build and run on POSIX:
  *   cc -std=gnu23 -Wall -Wextra -Werror -O2 -pthread -I. \
- *      tests/c/arena_test.c toy_arena.c toy_spec_cache.c -o arena_test
+ *      tests/c/arena_test.c arena.c spec_cache.c -o arena_test
  *   ./arena_test
  *
  * Build and run on Windows from a vcvars64 shell:
- *   cl /nologo /std:clatest /W4 /WX /O2 toy_arena.c toy_spec_cache.c \
+ *   cl /nologo /std:clatest /W4 /WX /O2 arena.c spec_cache.c \
  *      tests\c\arena_test.c /Fe:arena_test.exe
  *   arena_test.exe
  */
@@ -29,8 +29,8 @@
 # include <unistd.h>
 #endif
 
-#include "toy_arena.h"
-#include "toy_spec_cache.h"
+#include "arena.h"
+#include "spec_cache.h"
 
 #if defined(_M_X64) || defined(__x86_64__) || defined(_M_IX86) || defined(__i386__)
 # define TOY_TEST_HAVE_MACHINE_CODE 1
@@ -50,7 +50,7 @@ static int failures;
 
 #if TOY_TEST_HAVE_MACHINE_CODE
 /* mov eax, imm32; ret */
-static void toy_test_write_return_stub(uint8_t *code, int value)
+static void test_write_return_stub(uint8_t *code, int value)
 {
     code[0] = (uint8_t) 0xb8;
     code[1] = (uint8_t) (value & 0xff);
@@ -60,7 +60,7 @@ static void toy_test_write_return_stub(uint8_t *code, int value)
     code[5] = (uint8_t) 0xc3;
 }
 
-static int toy_test_call_code(const uint8_t *code)
+static int test_call_code(const uint8_t *code)
 {
     int (*function)(void);
     static_assert(sizeof(function) == sizeof(code), "a code pointer fits in a function pointer");
@@ -69,14 +69,14 @@ static int toy_test_call_code(const uint8_t *code)
 }
 #endif
 
-typedef enum toy_test_protection {
+typedef enum test_protection {
     TOY_TEST_PROT_RW,
     TOY_TEST_PROT_RX,
     TOY_TEST_PROT_NONE,
-} toy_test_protection;
+} test_protection;
 
 /* Checks the page protection. Rejects a writable executable page. */
-static bool toy_test_check_protection(const uint8_t *code, toy_test_protection expected)
+static bool test_check_protection(const uint8_t *code, test_protection expected)
 {
 #ifdef _WIN32
     MEMORY_BASIC_INFORMATION info;
@@ -132,7 +132,7 @@ static bool toy_test_check_protection(const uint8_t *code, toy_test_protection e
 typedef int (*ToyTestChildAction)(void *);
 
 /* Runs the action in a child. Returns the exit code or the negative signal. */
-static int toy_test_run_child(ToyTestChildAction action, void *argument)
+static int test_run_child(ToyTestChildAction action, void *argument)
 {
     pid_t pid = fork();
     if (pid < 0) {
@@ -155,24 +155,24 @@ static int toy_test_run_child(ToyTestChildAction action, void *argument)
 }
 #endif
 
-typedef struct toy_test_write_probe {
+typedef struct test_write_probe {
     uint8_t *code;
     size_t offset;
     uint8_t value;
-} toy_test_write_probe;
+} test_write_probe;
 
 #ifndef _WIN32
-static int toy_test_child_write(void *argument)
+static int test_child_write(void *argument)
 {
-    toy_test_write_probe *probe = argument;
+    test_write_probe *probe = argument;
     probe->code[probe->offset] = probe->value;
     return 0;
 }
 
-static int toy_test_child_execute(void *argument)
+static int test_child_execute(void *argument)
 {
 #if TOY_TEST_HAVE_MACHINE_CODE
-    return toy_test_call_code(argument) & 0xff;
+    return test_call_code(argument) & 0xff;
 #else
     (void) argument;
     return 0;
@@ -181,7 +181,7 @@ static int toy_test_child_execute(void *argument)
 #endif
 
 /* Returns true when the write faults. The page must stay unchanged. */
-static bool toy_test_write_faults(uint8_t *code, size_t offset, uint8_t value)
+static bool test_write_faults(uint8_t *code, size_t offset, uint8_t value)
 {
 #ifdef _WIN32
     volatile bool faulted = false;
@@ -192,14 +192,14 @@ static bool toy_test_write_faults(uint8_t *code, size_t offset, uint8_t value)
     }
     return faulted;
 #else
-    toy_test_write_probe probe = { .code = code, .offset = offset, .value = value };
-    int result = toy_test_run_child(toy_test_child_write, &probe);
+    test_write_probe probe = { .code = code, .offset = offset, .value = value };
+    int result = test_run_child(test_child_write, &probe);
     return result == -SIGSEGV || result == -SIGBUS;
 #endif
 }
 
 /* Returns true when execution faults, as it does on a writable page. */
-static bool toy_test_execute_faults(const uint8_t *code)
+static bool test_execute_faults(const uint8_t *code)
 {
 #ifdef _WIN32
     volatile bool faulted = false;
@@ -214,12 +214,12 @@ static bool toy_test_execute_faults(const uint8_t *code)
     (void) result;
     return faulted;
 #else
-    int result = toy_test_run_child(toy_test_child_execute, (void *) code);
+    int result = test_run_child(test_child_execute, (void *) code);
     return result == -SIGSEGV || result == -SIGBUS;
 #endif
 }
 
-static uint64_t toy_test_next_random(uint64_t *state)
+static uint64_t test_next_random(uint64_t *state)
 {
     uint64_t value = *state;
     value ^= value << 13;
@@ -229,136 +229,136 @@ static uint64_t toy_test_next_random(uint64_t *state)
     return value;
 }
 
-static toy_arena *toy_test_create_arena(size_t bytes, toy_arena_kind kind, uint32_t segments)
+static arena *test_create_arena(size_t bytes, arena_kind kind, uint32_t segments)
 {
-    toy_arena_config config = {
+    arena_config config = {
         .total_bytes = bytes,
         .kind = kind,
         .segment_count = segments,
         .coalesce = true,
         .coalesce_unbounded = false,
     };
-    return toy_arena_create(&config);
+    return arena_create(&config);
 }
 
 static void test_create(void)
 {
     printf("test_create\n");
 
-    toy_arena_config config = toy_arena_default_config();
+    arena_config config = arena_default_config();
     CHECK(config.total_bytes == ((size_t) 32 << 20));
     CHECK(config.kind == TOY_ARENA_TIERED);
     CHECK(config.segment_count == 8);
     CHECK(config.coalesce);
     CHECK(!config.coalesce_unbounded);
 
-    toy_arena *arena = toy_arena_create(NULL);
+    arena *arena = arena_create(NULL);
     CHECK(arena != NULL);
     if (arena != NULL) {
-        CHECK(toy_arena_page_size(arena) > 0);
-        CHECK(toy_arena_usable_bytes(arena) == ((size_t) 32 << 20));
-        CHECK(toy_arena_kind_of(arena) == TOY_ARENA_TIERED);
-        toy_arena_destroy(arena);
+        CHECK(arena_page_size(arena) > 0);
+        CHECK(arena_usable_bytes(arena) == ((size_t) 32 << 20));
+        CHECK(arena_kind_of(arena) == TOY_ARENA_TIERED);
+        arena_destroy(arena);
     }
 
-    arena = toy_test_create_arena((size_t) 1 << 20, TOY_ARENA_TIERED, 4);
+    arena = test_create_arena((size_t) 1 << 20, TOY_ARENA_TIERED, 4);
     CHECK(arena != NULL);
     if (arena != NULL) {
-        CHECK(toy_arena_usable_bytes(arena) == ((size_t) 1 << 20));
-        toy_arena_destroy(arena);
+        CHECK(arena_usable_bytes(arena) == ((size_t) 1 << 20));
+        arena_destroy(arena);
     }
 
-    CHECK(toy_test_create_arena((size_t) 1 << 20, TOY_ARENA_TIERED, 3) == NULL);
+    CHECK(test_create_arena((size_t) 1 << 20, TOY_ARENA_TIERED, 3) == NULL);
 
     /* A small arena uses fewer segments but keeps 8-page blocks available */
-    arena = toy_test_create_arena((size_t) 64 << 10, TOY_ARENA_TIERED, 8);
+    arena = test_create_arena((size_t) 64 << 10, TOY_ARENA_TIERED, 8);
     CHECK(arena != NULL);
     if (arena != NULL) {
-        CHECK(toy_arena_usable_bytes(arena) == ((size_t) 64 << 10));
-        toy_arena_block block = { 0 };
-        CHECK(toy_arena_alloc(arena, 8, &block));
-        toy_arena_free(arena, &block);
-        toy_arena_destroy(arena);
+        CHECK(arena_usable_bytes(arena) == ((size_t) 64 << 10));
+        arena_block block = { 0 };
+        CHECK(arena_alloc(arena, 8, &block));
+        arena_free(arena, &block);
+        arena_destroy(arena);
     }
 
     /* A zero byte count selects the default size */
-    arena = toy_test_create_arena(0, TOY_ARENA_TIERED, 1);
+    arena = test_create_arena(0, TOY_ARENA_TIERED, 1);
     CHECK(arena != NULL);
     if (arena != NULL) {
-        CHECK(toy_arena_usable_bytes(arena) == ((size_t) 32 << 20));
-        toy_arena_destroy(arena);
+        CHECK(arena_usable_bytes(arena) == ((size_t) 32 << 20));
+        arena_destroy(arena);
     }
-    CHECK(toy_test_create_arena(512, TOY_ARENA_TIERED, 1) == NULL);
-    toy_arena_destroy(NULL);
+    CHECK(test_create_arena(512, TOY_ARENA_TIERED, 1) == NULL);
+    arena_destroy(NULL);
 }
 
 static void test_tiers(void)
 {
     printf("test_tiers\n");
-    toy_arena *arena = toy_test_create_arena((size_t) 1 << 20, TOY_ARENA_TIERED, 1);
+    arena *arena = test_create_arena((size_t) 1 << 20, TOY_ARENA_TIERED, 1);
     CHECK(arena != NULL);
     if (arena == NULL) {
         return;
     }
-    size_t page_size = toy_arena_page_size(arena);
+    size_t page_size = arena_page_size(arena);
 
     for (uint32_t pages = 1; pages <= 8; pages <<= 1) {
-        toy_arena_block block = { 0 };
-        CHECK(toy_arena_alloc(arena, pages, &block));
+        arena_block block = { 0 };
+        CHECK(arena_alloc(arena, pages, &block));
         CHECK(block.pages == pages);
         CHECK(block.guard_pages == 0);
         CHECK((uintptr_t) block.code % page_size == 0);
-        CHECK(toy_test_check_protection(block.code, TOY_TEST_PROT_RW));
+        CHECK(test_check_protection(block.code, TOY_TEST_PROT_RW));
         for (size_t page = 0; page < pages; page++) {
             block.code[page * page_size] = (uint8_t) (0x10 + page);
             block.code[page * page_size + page_size - 1] = 0x7f;
         }
-        CHECK(toy_arena_seal(arena, &block));
-        CHECK(toy_test_check_protection(block.code, TOY_TEST_PROT_RX));
+        CHECK(arena_seal(arena, &block));
+        CHECK(test_check_protection(block.code, TOY_TEST_PROT_RX));
         CHECK(block.code[0] == 0x10);
-        CHECK(toy_arena_unseal(arena, &block));
-        CHECK(toy_test_check_protection(block.code, TOY_TEST_PROT_RW));
+        CHECK(arena_unseal(arena, &block));
+        CHECK(test_check_protection(block.code, TOY_TEST_PROT_RW));
 #if TOY_TEST_HAVE_MACHINE_CODE
-        toy_test_write_return_stub(block.code, (int) pages);
-        CHECK(toy_arena_seal(arena, &block));
-        CHECK(toy_test_call_code(block.code) == (int) pages);
+        test_write_return_stub(block.code, (int) pages);
+        CHECK(arena_seal(arena, &block));
+        CHECK(test_call_code(block.code) == (int) pages);
 #endif
-        toy_arena_free(arena, &block);
+        arena_free(arena, &block);
         CHECK(block.code == NULL);
         CHECK(block.pages == 0);
     }
 
-    toy_arena_block invalid = { 0 };
-    CHECK(!toy_arena_alloc(arena, 0, &invalid));
-    CHECK(!toy_arena_alloc(arena, 3, &invalid));
-    CHECK(!toy_arena_alloc(arena, 16, &invalid));
+    arena_block invalid = { 0 };
+    CHECK(!arena_alloc(arena, 0, &invalid));
+    CHECK(!arena_alloc(arena, 3, &invalid));
+    CHECK(!arena_alloc(arena, 16, &invalid));
     CHECK(invalid.code == NULL);
 
-    toy_arena_block bytes_block = { 0 };
-    CHECK(toy_arena_alloc_bytes(arena, 1, &bytes_block));
+    arena_block bytes_block = { 0 };
+    CHECK(arena_alloc_bytes(arena, 1, &bytes_block));
     CHECK(bytes_block.pages == 1);
-    toy_arena_free(arena, &bytes_block);
-    CHECK(toy_arena_alloc_bytes(arena, page_size + 1, &bytes_block));
+    arena_free(arena, &bytes_block);
+    CHECK(arena_alloc_bytes(arena, page_size + 1, &bytes_block));
     CHECK(bytes_block.pages == 2);
-    toy_arena_free(arena, &bytes_block);
-    CHECK(toy_arena_alloc_bytes(arena, page_size * 2 + 1, &bytes_block));
+    arena_free(arena, &bytes_block);
+    CHECK(arena_alloc_bytes(arena, page_size * 2 + 1, &bytes_block));
     CHECK(bytes_block.pages == 4);
-    toy_arena_free(arena, &bytes_block);
-    CHECK(toy_arena_alloc_bytes(arena, page_size * 8, &bytes_block));
+    arena_free(arena, &bytes_block);
+    CHECK(arena_alloc_bytes(arena, page_size * 8, &bytes_block));
     CHECK(bytes_block.pages == 8);
-    toy_arena_free(arena, &bytes_block);
-    CHECK(!toy_arena_alloc_bytes(arena, page_size * 8 + 1, &bytes_block));
-    CHECK(!toy_arena_alloc_bytes(arena, 0, &bytes_block));
+    arena_free(arena, &bytes_block);
+    CHECK(!arena_alloc_bytes(arena, page_size * 8 + 1, &bytes_block));
+    CHECK(!arena_alloc_bytes(arena, 0, &bytes_block));
 
-    toy_arena_stats stats;
-    toy_arena_get_stats(arena, &stats);
+    arena_stats stats;
+    arena_get_stats(arena, &stats);
     CHECK(stats.used_pages == 0);
     CHECK(stats.free_pages == stats.total_pages);
     CHECK(stats.alloc_failures == 0);
     CHECK(stats.alloc_calls > 0);
     CHECK(stats.free_calls > 0);
     CHECK(stats.mprotect_calls > 0);
-    toy_arena_destroy(arena);
+    arena_destroy(arena);
 }
 
 static void test_wx(void)
@@ -368,181 +368,181 @@ static void test_wx(void)
     printf("test_wx: skipped, this target has no test machine code\n");
     return;
 #else
-    toy_arena *arena = toy_test_create_arena((size_t) 1 << 20, TOY_ARENA_TIERED, 1);
+    arena *arena = test_create_arena((size_t) 1 << 20, TOY_ARENA_TIERED, 1);
     CHECK(arena != NULL);
     if (arena == NULL) {
         return;
     }
-    toy_arena_block block = { 0 };
-    CHECK(toy_arena_alloc(arena, 2, &block));
-    toy_test_write_return_stub(block.code, 42);
-    CHECK(toy_test_check_protection(block.code, TOY_TEST_PROT_RW));
+    arena_block block = { 0 };
+    CHECK(arena_alloc(arena, 2, &block));
+    test_write_return_stub(block.code, 42);
+    CHECK(test_check_protection(block.code, TOY_TEST_PROT_RW));
     /* A writable page rejects execution */
-    CHECK(toy_test_execute_faults(block.code));
+    CHECK(test_execute_faults(block.code));
 
-    CHECK(toy_arena_seal(arena, &block));
-    CHECK(toy_test_check_protection(block.code, TOY_TEST_PROT_RX));
-    CHECK(toy_test_call_code(block.code) == 42);
-    CHECK(!toy_test_execute_faults(block.code));
+    CHECK(arena_seal(arena, &block));
+    CHECK(test_check_protection(block.code, TOY_TEST_PROT_RX));
+    CHECK(test_call_code(block.code) == 42);
+    CHECK(!test_execute_faults(block.code));
 
     /* A sealed page rejects a write */
-    CHECK(toy_test_write_faults(block.code, 0, 0x90));
+    CHECK(test_write_faults(block.code, 0, 0x90));
 
-    CHECK(toy_arena_unseal(arena, &block));
-    CHECK(toy_test_check_protection(block.code, TOY_TEST_PROT_RW));
-    CHECK(toy_test_execute_faults(block.code));
+    CHECK(arena_unseal(arena, &block));
+    CHECK(test_check_protection(block.code, TOY_TEST_PROT_RW));
+    CHECK(test_execute_faults(block.code));
 
-    CHECK(toy_arena_seal(arena, &block));
-    CHECK(toy_test_call_code(block.code) == 42);
-    toy_arena_free(arena, &block);
-    toy_arena_destroy(arena);
+    CHECK(arena_seal(arena, &block));
+    CHECK(test_call_code(block.code) == 42);
+    arena_free(arena, &block);
+    arena_destroy(arena);
 #endif
 }
 
 static void test_reuse(void)
 {
     printf("test_reuse\n");
-    toy_arena *arena = toy_test_create_arena((size_t) 64 << 10, TOY_ARENA_TIERED, 1);
+    arena *arena = test_create_arena((size_t) 64 << 10, TOY_ARENA_TIERED, 1);
     CHECK(arena != NULL);
     if (arena == NULL) {
         return;
     }
 
-    toy_arena_block first = { 0 };
-    CHECK(toy_arena_alloc(arena, 1, &first));
+    arena_block first = { 0 };
+    CHECK(arena_alloc(arena, 1, &first));
     uint8_t *address = first.code;
     first.code[0] = 0xaa;
-    CHECK(toy_arena_seal(arena, &first));
-    toy_arena_free(arena, &first);
+    CHECK(arena_seal(arena, &first));
+    arena_free(arena, &first);
 
     /* A freed block keeps its protection until the next allocation */
-    toy_arena_block freed = { .code = address, .pages = 1, .guard_pages = 0 };
-    CHECK(toy_test_check_protection(freed.code, TOY_TEST_PROT_RX));
+    arena_block freed = { .code = address, .pages = 1, .guard_pages = 0 };
+    CHECK(test_check_protection(freed.code, TOY_TEST_PROT_RX));
 
-    toy_arena_block second = { 0 };
-    CHECK(toy_arena_alloc(arena, 1, &second));
+    arena_block second = { 0 };
+    CHECK(arena_alloc(arena, 1, &second));
     CHECK(second.code == address);
-    CHECK(toy_test_check_protection(second.code, TOY_TEST_PROT_RW));
+    CHECK(test_check_protection(second.code, TOY_TEST_PROT_RW));
     second.code[0] = 0xbb;
     CHECK(second.code[0] == 0xbb);
-    CHECK(toy_arena_seal(arena, &second));
-    toy_arena_free(arena, &second);
+    CHECK(arena_seal(arena, &second));
+    arena_free(arena, &second);
 
-    toy_arena_stats stats;
-    toy_arena_get_stats(arena, &stats);
+    arena_stats stats;
+    arena_get_stats(arena, &stats);
     CHECK(stats.used_pages == 0);
     CHECK(stats.alloc_calls == 2);
     CHECK(stats.free_calls == 2);
-    toy_arena_destroy(arena);
+    arena_destroy(arena);
 }
 
 static void test_capacity(void)
 {
     printf("test_capacity\n");
-    toy_arena *arena = toy_test_create_arena((size_t) 64 << 10, TOY_ARENA_TIERED, 1);
+    arena *arena = test_create_arena((size_t) 64 << 10, TOY_ARENA_TIERED, 1);
     CHECK(arena != NULL);
     if (arena == NULL) {
         return;
     }
-    size_t page_size = toy_arena_page_size(arena);
+    size_t page_size = arena_page_size(arena);
     uint64_t total_pages = (uint64_t) ((size_t) 64 << 10) / page_size;
 
     enum { block_count = 16 };
     CHECK(total_pages == block_count);
 
-    toy_arena_block blocks[block_count];
+    arena_block blocks[block_count];
     for (int i = 0; i < block_count; i++) {
-        blocks[i] = (toy_arena_block) { 0 };
-        CHECK(toy_arena_alloc(arena, 1, &blocks[i]));
+        blocks[i] = (arena_block) { 0 };
+        CHECK(arena_alloc(arena, 1, &blocks[i]));
         CHECK(blocks[i].code != NULL);
     }
 
-    toy_arena_block exhausted = { 0 };
-    CHECK(!toy_arena_alloc(arena, 1, &exhausted));
+    arena_block exhausted = { 0 };
+    CHECK(!arena_alloc(arena, 1, &exhausted));
     CHECK(exhausted.code == NULL);
 
-    toy_arena_stats stats;
-    toy_arena_get_stats(arena, &stats);
+    arena_stats stats;
+    arena_get_stats(arena, &stats);
     CHECK(stats.used_pages == total_pages);
     CHECK(stats.free_pages == 0);
     CHECK(stats.alloc_failures == 1);
 
     for (int i = 0; i < block_count; i++) {
-        toy_arena_free(arena, &blocks[i]);
+        arena_free(arena, &blocks[i]);
     }
-    toy_arena_get_stats(arena, &stats);
+    arena_get_stats(arena, &stats);
     CHECK(stats.used_pages == 0);
     CHECK(stats.free_pages == total_pages);
 
     /* Capacity returns after the release */
     for (int i = 0; i < block_count; i++) {
-        CHECK(toy_arena_alloc(arena, 1, &blocks[i]));
+        CHECK(arena_alloc(arena, 1, &blocks[i]));
     }
     for (int i = 0; i < block_count; i++) {
-        toy_arena_free(arena, &blocks[i]);
+        arena_free(arena, &blocks[i]);
     }
-    toy_arena_get_stats(arena, &stats);
+    arena_get_stats(arena, &stats);
     CHECK(stats.used_pages == 0);
-    toy_arena_destroy(arena);
+    arena_destroy(arena);
 }
 
 static void test_guarded(void)
 {
     printf("test_guarded\n");
-    toy_arena *arena = toy_test_create_arena((size_t) 128 << 10, TOY_ARENA_GUARDED, 1);
+    arena *arena = test_create_arena((size_t) 128 << 10, TOY_ARENA_GUARDED, 1);
     CHECK(arena != NULL);
     if (arena == NULL) {
         return;
     }
-    size_t page_size = toy_arena_page_size(arena);
+    size_t page_size = arena_page_size(arena);
 
-    toy_arena_block block = { 0 };
-    CHECK(toy_arena_alloc(arena, 1, &block));
+    arena_block block = { 0 };
+    CHECK(arena_alloc(arena, 1, &block));
     CHECK(block.guard_pages == 1);
-    CHECK(toy_test_check_protection(block.code, TOY_TEST_PROT_RW));
-    CHECK(toy_test_check_protection(block.code + page_size, TOY_TEST_PROT_NONE));
+    CHECK(test_check_protection(block.code, TOY_TEST_PROT_RW));
+    CHECK(test_check_protection(block.code + page_size, TOY_TEST_PROT_NONE));
     block.code[0] = 0x55;
     CHECK(block.code[0] == 0x55);
 
     /* The guard page catches a write beyond the block */
-    CHECK(toy_test_write_faults(block.code, page_size, 0x11));
+    CHECK(test_write_faults(block.code, page_size, 0x11));
 
-    CHECK(toy_arena_seal(arena, &block));
-    CHECK(toy_test_check_protection(block.code, TOY_TEST_PROT_RX));
-    CHECK(toy_test_check_protection(block.code + page_size, TOY_TEST_PROT_NONE));
+    CHECK(arena_seal(arena, &block));
+    CHECK(test_check_protection(block.code, TOY_TEST_PROT_RX));
+    CHECK(test_check_protection(block.code + page_size, TOY_TEST_PROT_NONE));
 
-    toy_arena_stats stats;
-    toy_arena_get_stats(arena, &stats);
+    arena_stats stats;
+    arena_get_stats(arena, &stats);
     CHECK(stats.used_pages == 2);
 
-    toy_arena_free(arena, &block);
-    toy_arena_get_stats(arena, &stats);
+    arena_free(arena, &block);
+    arena_get_stats(arena, &stats);
     CHECK(stats.used_pages == 0);
     CHECK(stats.alloc_calls == 1);
     CHECK(stats.free_calls == 1);
 
     /* 128 KiB holds 16 one-page blocks with one guard page each */
-    toy_arena_block blocks[16];
+    arena_block blocks[16];
     int allocated = 0;
     for (int i = 0; i < 16; i++) {
-        blocks[i] = (toy_arena_block) { 0 };
-        CHECK(toy_arena_alloc(arena, 1, &blocks[i]));
+        blocks[i] = (arena_block) { 0 };
+        CHECK(arena_alloc(arena, 1, &blocks[i]));
         if (blocks[i].code != NULL) {
             allocated++;
         }
     }
     CHECK(allocated == 16);
-    toy_arena_block exhausted = { 0 };
-    CHECK(!toy_arena_alloc(arena, 1, &exhausted));
+    arena_block exhausted = { 0 };
+    CHECK(!arena_alloc(arena, 1, &exhausted));
     for (int i = 0; i < 16; i++) {
-        toy_arena_free(arena, &blocks[i]);
+        arena_free(arena, &blocks[i]);
     }
-    toy_arena_destroy(arena);
+    arena_destroy(arena);
 }
 
 static int fill_calls;
 
-static bool toy_test_fill(const uint8_t *key, void *context, uint8_t *code,
+static bool test_fill(const uint8_t *key, void *context, uint8_t *code,
                           size_t capacity_bytes)
 {
     (void) context;
@@ -551,14 +551,14 @@ static bool toy_test_fill(const uint8_t *key, void *context, uint8_t *code,
         return false;
     }
 #if TOY_TEST_HAVE_MACHINE_CODE
-    toy_test_write_return_stub(code, (int) key[0]);
+    test_write_return_stub(code, (int) key[0]);
 #else
     code[0] = key[0];
 #endif
     return true;
 }
 
-static bool toy_test_fill_fails(const uint8_t *key, void *context, uint8_t *code,
+static bool test_fill_fails(const uint8_t *key, void *context, uint8_t *code,
                                 size_t capacity_bytes)
 {
     (void) key;
@@ -569,7 +569,7 @@ static bool toy_test_fill_fails(const uint8_t *key, void *context, uint8_t *code
     return false;
 }
 
-static void toy_test_make_key(uint8_t key[TOY_SPEC_KEY_SIZE], uint64_t id)
+static void test_make_key(uint8_t key[TOY_SPEC_KEY_SIZE], uint64_t id)
 {
     memset(key, 0, TOY_SPEC_KEY_SIZE);
     memcpy(key, &id, sizeof(id));
@@ -578,158 +578,158 @@ static void toy_test_make_key(uint8_t key[TOY_SPEC_KEY_SIZE], uint64_t id)
 static void test_cache(void)
 {
     printf("test_cache\n");
-    toy_arena *arena = toy_test_create_arena((size_t) 1 << 20, TOY_ARENA_TIERED, 1);
+    arena *arena = test_create_arena((size_t) 1 << 20, TOY_ARENA_TIERED, 1);
     CHECK(arena != NULL);
     if (arena == NULL) {
         return;
     }
-    toy_spec_cache *cache = toy_spec_cache_create(arena, 64);
+    spec_cache *cache = spec_cache_create(arena, 64);
     CHECK(cache != NULL);
     if (cache == NULL) {
-        toy_arena_destroy(arena);
+        arena_destroy(arena);
         return;
     }
 
     uint8_t key[TOY_SPEC_KEY_SIZE];
-    toy_spec_cache_stats cache_stats;
-    toy_arena_stats arena_stats;
+    spec_cache_stats cache_stats;
+    arena_stats arena_stats;
 
-    toy_test_make_key(key, 0);
-    toy_arena_block first = { 0 };
+    test_make_key(key, 0);
+    arena_block first = { 0 };
     fill_calls = 0;
-    CHECK(toy_spec_cache_get_or_create(cache, key, 64, toy_test_fill, NULL, &first));
+    CHECK(spec_cache_get_or_create(cache, key, 64, test_fill, NULL, &first));
     CHECK(fill_calls == 1);
     CHECK(first.pages == 1);
     CHECK(first.guard_pages == 0);
-    CHECK(toy_test_check_protection(first.code, TOY_TEST_PROT_RX));
+    CHECK(test_check_protection(first.code, TOY_TEST_PROT_RX));
 #if TOY_TEST_HAVE_MACHINE_CODE
-    CHECK(toy_test_call_code(first.code) == 0);
+    CHECK(test_call_code(first.code) == 0);
 #endif
 
     /* A hit returns the same block and does not call the fill callback */
-    toy_arena_block again = { 0 };
-    CHECK(toy_spec_cache_get_or_create(cache, key, 64, toy_test_fill, NULL, &again));
+    arena_block again = { 0 };
+    CHECK(spec_cache_get_or_create(cache, key, 64, test_fill, NULL, &again));
     CHECK(fill_calls == 1);
     CHECK(again.code == first.code);
 
-    toy_arena_block looked_up = { 0 };
-    CHECK(toy_spec_cache_lookup(cache, key, &looked_up));
+    arena_block looked_up = { 0 };
+    CHECK(spec_cache_lookup(cache, key, &looked_up));
     CHECK(looked_up.code == first.code);
 
     /* The code pointer form returns the sealed block and never refills */
-    CHECK(toy_spec_cache_get_code(cache, key, 64, toy_test_fill, NULL) == first.code);
+    CHECK(spec_cache_get_code(cache, key, 64, test_fill, NULL) == first.code);
     CHECK(fill_calls == 1);
-    CHECK(toy_spec_cache_get_code(NULL, key, 64, toy_test_fill, NULL) == NULL);
+    CHECK(spec_cache_get_code(NULL, key, 64, test_fill, NULL) == NULL);
 
     /* A key that differs in one byte is a different spec */
     uint8_t other_key[TOY_SPEC_KEY_SIZE];
-    toy_test_make_key(other_key, 1);
-    CHECK(!toy_spec_cache_lookup(cache, other_key, &looked_up));
+    test_make_key(other_key, 1);
+    CHECK(!spec_cache_lookup(cache, other_key, &looked_up));
 
     /* A failed fill returns no block and returns the pages to the arena */
-    toy_arena_get_stats(arena, &arena_stats);
+    arena_get_stats(arena, &arena_stats);
     uint64_t used_before_failure = arena_stats.used_pages;
     uint8_t failing_key[TOY_SPEC_KEY_SIZE];
-    toy_test_make_key(failing_key, 200);
+    test_make_key(failing_key, 200);
     fill_calls = 0;
-    CHECK(!toy_spec_cache_get_or_create(cache, failing_key, 64, toy_test_fill_fails, NULL,
+    CHECK(!spec_cache_get_or_create(cache, failing_key, 64, test_fill_fails, NULL,
                                         &looked_up));
     CHECK(fill_calls == 1);
-    toy_arena_get_stats(arena, &arena_stats);
+    arena_get_stats(arena, &arena_stats);
     CHECK(arena_stats.used_pages == used_before_failure);
-    toy_spec_cache_get_stats(cache, &cache_stats);
+    spec_cache_get_stats(cache, &cache_stats);
     CHECK(cache_stats.fill_failures == 1);
 
     /* An oversized kernel fails before the fill callback runs */
-    toy_test_make_key(failing_key, 201);
+    test_make_key(failing_key, 201);
     fill_calls = 0;
-    CHECK(!toy_spec_cache_get_or_create(cache, failing_key, 1 << 16, toy_test_fill, NULL,
+    CHECK(!spec_cache_get_or_create(cache, failing_key, 1 << 16, test_fill, NULL,
                                         &looked_up));
     CHECK(fill_calls == 0);
-    CHECK(toy_spec_cache_get_code(cache, failing_key, 1 << 16, toy_test_fill, NULL) == NULL);
+    CHECK(spec_cache_get_code(cache, failing_key, 1 << 16, test_fill, NULL) == NULL);
     CHECK(fill_calls == 0);
 
     /* Fill the table up to its 64 entries */
     for (uint64_t id = 1; id < 64; id++) {
-        toy_test_make_key(key, id);
-        toy_arena_block block = { 0 };
-        CHECK(toy_spec_cache_get_or_create(cache, key, 64, toy_test_fill, NULL, &block));
+        test_make_key(key, id);
+        arena_block block = { 0 };
+        CHECK(spec_cache_get_or_create(cache, key, 64, test_fill, NULL, &block));
     }
-    toy_spec_cache_get_stats(cache, &cache_stats);
+    spec_cache_get_stats(cache, &cache_stats);
     CHECK(cache_stats.capacity == 64);
     CHECK(cache_stats.used == 64);
     CHECK(cache_stats.insert_failures == 0);
 
     /* The full table rejects the next insert and frees its block */
-    toy_arena_get_stats(arena, &arena_stats);
+    arena_get_stats(arena, &arena_stats);
     used_before_failure = arena_stats.used_pages;
-    toy_test_make_key(key, 64);
-    toy_arena_block rejected = { 0 };
-    CHECK(!toy_spec_cache_get_or_create(cache, key, 64, toy_test_fill, NULL, &rejected));
-    toy_spec_cache_get_stats(cache, &cache_stats);
+    test_make_key(key, 64);
+    arena_block rejected = { 0 };
+    CHECK(!spec_cache_get_or_create(cache, key, 64, test_fill, NULL, &rejected));
+    spec_cache_get_stats(cache, &cache_stats);
     CHECK(cache_stats.insert_failures == 1);
     CHECK(cache_stats.used == 64);
-    toy_arena_get_stats(arena, &arena_stats);
+    arena_get_stats(arena, &arena_stats);
     CHECK(arena_stats.used_pages == used_before_failure);
 
     /* Every stored kernel stays executable and returns its own value */
-    toy_test_make_key(key, 7);
-    toy_arena_block seven = { 0 };
-    CHECK(toy_spec_cache_lookup(cache, key, &seven));
+    test_make_key(key, 7);
+    arena_block seven = { 0 };
+    CHECK(spec_cache_lookup(cache, key, &seven));
 #if TOY_TEST_HAVE_MACHINE_CODE
-    CHECK(toy_test_call_code(seven.code) == 7);
+    CHECK(test_call_code(seven.code) == 7);
 #endif
-    toy_test_make_key(key, 100);
-    CHECK(!toy_spec_cache_lookup(cache, key, &seven));
+    test_make_key(key, 100);
+    CHECK(!spec_cache_lookup(cache, key, &seven));
 
-    toy_spec_cache_destroy(cache);
-    toy_arena_get_stats(arena, &arena_stats);
+    spec_cache_destroy(cache);
+    arena_get_stats(arena, &arena_stats);
     CHECK(arena_stats.used_pages == 64);
-    toy_arena_destroy(arena);
+    arena_destroy(arena);
 
-    CHECK(toy_spec_cache_create(NULL, 64) == NULL);
-    toy_spec_cache_destroy(NULL);
+    CHECK(spec_cache_create(NULL, 64) == NULL);
+    spec_cache_destroy(NULL);
 }
 
-typedef struct toy_test_thread_state {
-    toy_arena *arena;
+typedef struct test_thread_state {
+    arena *arena;
     uint64_t seed;
     int error;
-} toy_test_thread_state;
+} test_thread_state;
 
-static void *toy_test_thread_main(void *argument)
+static void *test_thread_main(void *argument)
 {
-    toy_test_thread_state *state = argument;
+    test_thread_state *state = argument;
     uint64_t random = state->seed;
-    size_t page_size = toy_arena_page_size(state->arena);
+    size_t page_size = arena_page_size(state->arena);
 
     for (int i = 0; i < 100; i++) {
-        random = toy_test_next_random(&random);
+        random = test_next_random(&random);
         uint32_t pages = UINT32_C(1) << (random % 4);
-        toy_arena_block block = { 0 };
-        if (!toy_arena_alloc(state->arena, pages, &block)) {
+        arena_block block = { 0 };
+        if (!arena_alloc(state->arena, pages, &block)) {
             state->error = 1;
             return NULL;
         }
         uint8_t pattern = (uint8_t) (random & 0xff);
         memset(block.code, pattern, (size_t) pages * page_size);
-        if (!toy_arena_seal(state->arena, &block)) {
+        if (!arena_seal(state->arena, &block)) {
             state->error = 2;
-            toy_arena_free(state->arena, &block);
+            arena_free(state->arena, &block);
             return NULL;
         }
         if (block.code[0] != pattern) {
             state->error = 3;
         }
-        toy_arena_free(state->arena, &block);
+        arena_free(state->arena, &block);
     }
     return NULL;
 }
 
 #ifdef _WIN32
-static unsigned __stdcall toy_test_thread_entry(void *argument)
+static unsigned __stdcall test_thread_entry(void *argument)
 {
-    toy_test_thread_main(argument);
+    test_thread_main(argument);
     return 0;
 }
 #endif
@@ -737,7 +737,7 @@ static unsigned __stdcall toy_test_thread_entry(void *argument)
 static void test_threads(void)
 {
     printf("test_threads\n");
-    toy_arena *arena = toy_test_create_arena((size_t) 1 << 20, TOY_ARENA_TIERED, 8);
+    arena *arena = test_create_arena((size_t) 1 << 20, TOY_ARENA_TIERED, 8);
     CHECK(arena != NULL);
     if (arena == NULL) {
         return;
@@ -750,17 +750,17 @@ static void test_threads(void)
     pthread_t threads[thread_count];
 #endif
     bool started[thread_count] = { false };
-    toy_test_thread_state states[thread_count];
+    test_thread_state states[thread_count];
     for (int i = 0; i < thread_count; i++) {
-        states[i] = (toy_test_thread_state) {
+        states[i] = (test_thread_state) {
             .arena = arena,
             .seed = (uint64_t) (i + 1) * UINT64_C(0x9e3779b97f4a7c15),
         };
 #ifdef _WIN32
-        threads[i] = (HANDLE) _beginthreadex(NULL, 0, toy_test_thread_entry, &states[i], 0, NULL);
+        threads[i] = (HANDLE) _beginthreadex(NULL, 0, test_thread_entry, &states[i], 0, NULL);
         started[i] = threads[i] != NULL;
 #else
-        started[i] = pthread_create(&threads[i], NULL, toy_test_thread_main, &states[i]) == 0;
+        started[i] = pthread_create(&threads[i], NULL, test_thread_main, &states[i]) == 0;
 #endif
         if (!started[i]) {
             states[i].error = 1;
@@ -781,13 +781,13 @@ static void test_threads(void)
         CHECK(states[i].error == 0);
     }
 
-    toy_arena_stats stats;
-    toy_arena_get_stats(arena, &stats);
+    arena_stats stats;
+    arena_get_stats(arena, &stats);
     CHECK(stats.used_pages == 0);
     CHECK(stats.free_pages == stats.total_pages);
     CHECK(stats.alloc_failures == 0);
     CHECK(stats.alloc_calls == stats.free_calls);
-    toy_arena_destroy(arena);
+    arena_destroy(arena);
 }
 
 int main(void)

@@ -21,26 +21,26 @@ Toy\Tensor\kernel_stats(true);
 foreach ($cases as [$m, $n, $k]) {
     $wv = [];
     for ($i = 0; $i < $m * $k; $i++) {
-        $wv[] = toy_test_value($i, $m * 5 + $k);
+        $wv[] = test_value($i, $m * 5 + $k);
     }
     $xv = [];
     for ($i = 0; $i < $k * $n; $i++) {
-        $xv[] = toy_test_value($i, $n * 7 + 1);
+        $xv[] = test_value($i, $n * 7 + 1);
     }
-    $w = toy_test_tensor([$m, $k], $wv)->cast('q8_0');
-    $x = toy_test_tensor([$k, $n], $xv);
-    $blocks = toy_test_q8_blocks($w->toBytes());
+    $w = test_tensor([$m, $k], $wv)->cast('q8_0');
+    $x = test_tensor([$k, $n], $xv);
+    $blocks = test_q8_blocks($w->toBytes());
 
-    $got = toy_test_floats(Toy\Tensor\matmul_q8_0_f32($w, $x, $m, $n, $k));
-    [$ref, $absSums] = toy_test_q8_matmul_ref($blocks, $xv, $m, $n, $k);
-    $metrics = toy_test_q8_metrics($got, $ref, $absSums);
+    $got = test_floats(Toy\Tensor\matmul_q8_0_f32($w, $x, $m, $n, $k));
+    [$ref, $absSums] = test_q8_matmul_ref($blocks, $xv, $m, $n, $k);
+    $metrics = test_q8_metrics($got, $ref, $absSums);
     $ok = $ok && $metrics['maxScaled'] < 4e-6;
 
     $vector = array_slice($xv, 0, $k);
-    $x1 = toy_test_tensor([$k], $vector);
-    $got = toy_test_floats(Toy\Tensor\matvec_q8_0_f32($w, $x1, $m, $k));
-    [$ref, $absSums] = toy_test_q8_matvec_ref($blocks, $vector, $m, $k);
-    $metrics = toy_test_q8_metrics($got, $ref, $absSums);
+    $x1 = test_tensor([$k], $vector);
+    $got = test_floats(Toy\Tensor\matvec_q8_0_f32($w, $x1, $m, $k));
+    [$ref, $absSums] = test_q8_matvec_ref($blocks, $vector, $m, $k);
+    $metrics = test_q8_metrics($got, $ref, $absSums);
     $ok = $ok && $metrics['maxScaled'] < 4e-6;
 }
 

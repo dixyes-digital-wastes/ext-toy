@@ -8,7 +8,7 @@
  * _Float16
  * The rounding is round-to-nearest-even, the same as the hardware conversion
  */
-float toy_f16_to_f32(uint16_t h) {
+float f16_to_f32(uint16_t h) {
     const uint32_t sign = (uint32_t)(h & 0x8000u) << 16;
     uint32_t exp = (uint32_t)(h >> 10) & 0x1Fu;
     uint32_t mant = (uint32_t)h & 0x3FFu;
@@ -37,7 +37,7 @@ float toy_f16_to_f32(uint16_t h) {
     return value;
 }
 
-uint16_t toy_f32_to_f16(float f) {
+uint16_t f32_to_f16(float f) {
     uint32_t bits;
     memcpy(&bits, &f, sizeof(bits));
 
@@ -75,13 +75,13 @@ uint16_t toy_f32_to_f16(float f) {
     return (uint16_t)(sign | half);
 }
 
-size_t toy_q8_0_row_bytes(uint32_t k) {
+size_t q8_0_row_bytes(uint32_t k) {
     return (size_t)(k / TOY_Q8_0_BLOCK) * TOY_Q8_0_BLOCK_BYTES;
 }
 
-void toy_q8_0_quantize_rows(uint32_t rows, uint32_t k, const float *src, void *dst) {
+void q8_0_quantize_rows(uint32_t rows, uint32_t k, const float *src, void *dst) {
     const uint32_t blocks = k / TOY_Q8_0_BLOCK;
-    struct toy_q8_0_block *out = dst;
+    struct q8_0_block *out = dst;
     for (uint32_t r = 0; r < rows; r++) {
         for (uint32_t b = 0; b < blocks; b++) {
             const float *x = src + ((size_t)r * blocks + b) * TOY_Q8_0_BLOCK;
@@ -94,7 +94,7 @@ void toy_q8_0_quantize_rows(uint32_t rows, uint32_t k, const float *src, void *d
             }
             const float d = amax / 127.0f;
             const float id = d != 0.0f ? 1.0f / d : 0.0f;
-            out->d = toy_f32_to_f16(d);
+            out->d = f32_to_f16(d);
             for (int i = 0; i < TOY_Q8_0_BLOCK; i++) {
                 int q = (int)roundf(x[i] * id);
                 if (q > 127) {
@@ -110,12 +110,12 @@ void toy_q8_0_quantize_rows(uint32_t rows, uint32_t k, const float *src, void *d
     }
 }
 
-void toy_q8_0_dequantize_rows(uint32_t rows, uint32_t k, const void *src, float *dst) {
+void q8_0_dequantize_rows(uint32_t rows, uint32_t k, const void *src, float *dst) {
     const uint32_t blocks = k / TOY_Q8_0_BLOCK;
-    const struct toy_q8_0_block *in = src;
+    const struct q8_0_block *in = src;
     for (uint32_t r = 0; r < rows; r++) {
         for (uint32_t b = 0; b < blocks; b++) {
-            const float d = toy_f16_to_f32(in->d);
+            const float d = f16_to_f32(in->d);
             float *x = dst + ((size_t)r * blocks + b) * TOY_Q8_0_BLOCK;
             for (int i = 0; i < TOY_Q8_0_BLOCK; i++) {
                 x[i] = (float)in->qs[i] * d;

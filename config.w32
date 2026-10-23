@@ -16,6 +16,6 @@ if (PHP_TOY != "no") {
 	 * reads them with the ANSI code page and a comment can swallow the next line
 	 */
 	EXTENSION("toy",
-		"tensor.c tensor_ops.c codegen\\src\\asm.c codegen\\src\\emit.c codegen\\src\\isa.c codegen\\src\\q8_0.c codegen\\src\\ref.c toy_arena.c toy_kernel.c toy_kernel_arena.c toy_spec_cache.c toy_tensor.c",
+		"module.c ops.c codegen\\src\\asm.c codegen\\src\\emit.c codegen\\src\\isa.c codegen\\src\\q8_0.c codegen\\src\\ref.c arena.c kernel.c arena_config.c spec_cache.c tensor.c",
 		PHP_TOY_SHARED, "/std:clatest /source-charset:utf-8 /I . /FI tensor_msvc_compat.h /I codegen\\include");
 }

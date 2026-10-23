@@ -3,10 +3,6 @@
 /*
  * CPU feature detection
  *
- * The standalone generator keeps this code in exec.c, together with its mmap
- * executable memory. This snapshot only needs the check, so the code lives in
- * its own file
- *
  * Both generated ISAs use FMA instructions, so scalar also needs FMA
  * The q8_0 kernels use vcvtph2ps, so they also need F16C
  */
@@ -21,10 +17,10 @@
 # define TOY_ISA_MSVC_X64 1
 #endif
 
-static bool toy_isa_ready;
-static bool toy_isa_fma;
-static bool toy_isa_avx2;
-static bool toy_isa_f16c;
+static bool isa_ready;
+static bool isa_fma;
+static bool isa_avx2;
+static bool isa_f16c;
 
 #if defined(TOY_ISA_MSVC_X64)
 /*
@@ -32,7 +28,7 @@ static bool toy_isa_f16c;
  * FMA and F16C are VEX-encoded instructions, so the OS must save the YMM state
  * before they are available
  */
-static void toy_isa_init_msvc(void) {
+static void isa_init_msvc(void) {
     int regs[4] = { 0, 0, 0, 0 };
     __cpuid(regs, 0);
     const int max_leaf = regs[0];
@@ -55,54 +51,54 @@ static void toy_isa_init_msvc(void) {
         avx2 = (regs[1] & (1 << 5)) != 0;
     }
 
-    toy_isa_fma = fma && ymm;
-    toy_isa_f16c = f16c && ymm;
-    toy_isa_avx2 = avx2 && ymm;
+    isa_fma = fma && ymm;
+    isa_f16c = f16c && ymm;
+    isa_avx2 = avx2 && ymm;
 }
 #endif
 
-static void toy_isa_init(void) {
-    if (toy_isa_ready) {
+static void isa_init(void) {
+    if (isa_ready) {
         return;
     }
 
 #if defined(TOY_ISA_MSVC_X64)
-    toy_isa_init_msvc();
+    isa_init_msvc();
 #elif defined(TOY_ISA_ARCH_X86) && (defined(__GNUC__) || defined(__clang__))
     __builtin_cpu_init();
-    toy_isa_fma = __builtin_cpu_supports("fma") != 0;
-    toy_isa_avx2 = toy_isa_fma && __builtin_cpu_supports("avx2") != 0;
-    toy_isa_f16c = __builtin_cpu_supports("f16c") != 0;
+    isa_fma = __builtin_cpu_supports("fma") != 0;
+    isa_avx2 = isa_fma && __builtin_cpu_supports("avx2") != 0;
+    isa_f16c = __builtin_cpu_supports("f16c") != 0;
 #endif
 
-    toy_isa_ready = true;
+    isa_ready = true;
 }
 
-bool toy_isa_available(uint32_t isa) {
-    toy_isa_init();
+bool isa_available(uint32_t isa) {
+    isa_init();
 
     switch (isa) {
         case TOY_ISA_SCALAR:
-            return toy_isa_fma;
+            return isa_fma;
         case TOY_ISA_AVX2:
-            return toy_isa_avx2;
+            return isa_avx2;
         default:
             return false;
     }
 }
 
-bool toy_spec_supported(const struct toy_spec *spec) {
-    if (spec == NULL || !toy_isa_available(spec->isa)) {
+bool spec_supported(const struct spec *spec) {
+    if (spec == NULL || !isa_available(spec->isa)) {
         return false;
     }
 
     if (spec->op >= TOY_OP_Q8_0_DOT && spec->op <= TOY_OP_Q8_0_MATMUL) {
-        return toy_isa_f16c;
+        return isa_f16c;
     }
     return true;
 }
 
-bool toy_f16c_available(void) {
-    toy_isa_init();
-    return toy_isa_f16c;
+bool f16c_available(void) {
+    isa_init();
+    return isa_f16c;
 }

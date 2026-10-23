@@ -17,17 +17,17 @@ function show(callable $fn): void {
 
 $values = [];
 for ($i = 0; $i < 64; $i++) {
-    $values[] = toy_test_value($i, 15) * (1.0 + ($i % 5) * 0.8);
+    $values[] = test_value($i, 15) * (1.0 + ($i % 5) * 0.8);
 }
 
-$source = toy_test_tensor([2, 32], $values);
+$source = test_tensor([2, 32], $values);
 $quantized = $source->cast('q8_0');
 var_dump($quantized->dtype);
 var_dump($quantized->bytes());
 var_dump($source->dtype);
 var_dump($source->bytes());
 
-$blocks = toy_test_q8_blocks($quantized->toBytes());
+$blocks = test_q8_blocks($quantized->toBytes());
 var_dump(count($blocks));
 
 $layoutOk = true;
@@ -38,14 +38,14 @@ for ($b = 0; $b < 2; $b++) {
     foreach ($chunk as $value) {
         $amax = max($amax, abs($value));
     }
-    $d = toy_test_f32($amax / 127.0);
-    $id = toy_test_f32(1.0 / $d);
-    $maxStep = max($maxStep, toy_test_f16_to_f32(toy_test_f32_to_f16_bits($d)));
+    $d = test_f32($amax / 127.0);
+    $id = test_f32(1.0 / $d);
+    $maxStep = max($maxStep, test_f16_to_f32(test_f32_to_f16_bits($d)));
 
     $layoutOk = $layoutOk
-        && toy_test_f32_to_f16_bits($d) === unpack('v', substr($quantized->toBytes(), $b * 34, 2))[1];
+        && test_f32_to_f16_bits($d) === unpack('v', substr($quantized->toBytes(), $b * 34, 2))[1];
     for ($i = 0; $i < 32; $i++) {
-        $scaled = toy_test_f32($chunk[$i] * $id);
+        $scaled = test_f32($chunk[$i] * $id);
         $q = (int) round($scaled);
         $q = max(-127, min(127, $q));
         $layoutOk = $layoutOk && $q === $blocks[$b]['q'][$i];
@@ -76,7 +76,7 @@ $copy = $source->cast('f32');
 var_dump($copy !== $source);
 var_dump($copy->toBytes() === $source->toBytes());
 
-show(fn() => toy_test_tensor([33], array_fill(0, 33, 1.0))->cast('q8_0'));
+show(fn() => test_tensor([33], array_fill(0, 33, 1.0))->cast('q8_0'));
 show(fn() => $source->cast('f16'));
 show(fn() => $quantized->cast('f16'));
 show(fn() => Toy\Tensor::zeros('f32', [3, 33])->cast('q8_0'));

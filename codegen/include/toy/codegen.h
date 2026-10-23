@@ -9,7 +9,7 @@
 extern "C" {
 #endif
 
-enum toy_op {
+enum op {
     TOY_OP_GEMM = 1,
     TOY_OP_MATVEC = 2,
     TOY_OP_DOT = 3,
@@ -22,7 +22,7 @@ enum toy_op {
     TOY_OP_Q8_0_MATMUL = 9,
 };
 
-enum toy_isa {
+enum isa {
     TOY_ISA_SCALAR = 1,
     TOY_ISA_AVX2 = 2,
 };
@@ -46,7 +46,7 @@ enum toy_isa {
  * For q8_0, k must be a multiple of 32. A weight row is a series of 34-byte
  * blocks
  */
-struct toy_spec {
+struct spec {
     uint32_t op;
     uint32_t isa;
     uint32_t m;
@@ -55,7 +55,7 @@ struct toy_spec {
     uint32_t param_bits;
 };
 
-typedef void (*toy_kernel_fn)(const void *a, const void *b, void *c);
+typedef void (*kernel_fn)(const void *a, const void *b, void *c);
 
 /*
  * Writes the machine code into buf and returns the byte count. Returns 0 on
@@ -63,27 +63,27 @@ typedef void (*toy_kernel_fn)(const void *a, const void *b, void *c);
  *
  * buf must hold at least 16 KiB, see TOY_EMIT_CAP
  *
- * This snapshot only generates code and does not allocate executable memory.
+ * The generator writes code only and does not allocate executable memory.
  * The caller provides the writable block and seals it
  */
 #define TOY_EMIT_CAP (16u * 1024u)
 
-size_t toy_emit(const struct toy_spec *spec, uint8_t *buf, size_t cap);
+size_t emit(const struct spec *spec, uint8_t *buf, size_t cap);
 
 // Reports if the host can run a kernel for this ISA. Both ISAs need FMA
-bool toy_isa_available(uint32_t isa);
+bool isa_available(uint32_t isa);
 
 // Reports if the ISA and the op extensions are available. q8_0 also needs F16C
-bool toy_spec_supported(const struct toy_spec *spec);
+bool spec_supported(const struct spec *spec);
 
 // Reports F16C availability for the diagnostic API
-bool toy_f16c_available(void);
+bool f16c_available(void);
 
-const char *toy_op_name(uint32_t op);
-const char *toy_isa_name(uint32_t isa);
+const char *op_name(uint32_t op);
+const char *isa_name(uint32_t isa);
 
 // Returns the floating-point operation count of the kernel, 0 for an unknown op
-double toy_spec_flops(const struct toy_spec *spec);
+double spec_flops(const struct spec *spec);
 
 #ifdef __cplusplus
 }

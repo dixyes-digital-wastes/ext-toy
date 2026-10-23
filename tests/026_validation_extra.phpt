@@ -26,7 +26,7 @@ $weight = Toy\Tensor::full('q8_0', [$m, $k], 1.0);
 $vector = Toy\Tensor::full('f32', [$k], 2.0);
 Toy\Tensor\kernel_stats(true);
 $product = Toy\Tensor\matvec_q8_0_f32($weight, $vector, $m, $k);
-$floats = toy_test_floats($product);
+$floats = test_floats($product);
 var_dump(abs($floats[0] - 64.0) < 0.02);
 var_dump(abs($floats[$m - 1] - 64.0) < 0.02);
 $stats = Toy\Tensor\kernel_stats();
@@ -39,18 +39,18 @@ $n = 33;
 $k = 64;
 $wv = [];
 for ($i = 0; $i < $m * $k; $i++) {
-    $wv[] = toy_test_value($i, 7);
+    $wv[] = test_value($i, 7);
 }
 $xv = [];
 for ($i = 0; $i < $k * $n; $i++) {
-    $xv[] = toy_test_value($i, 8);
+    $xv[] = test_value($i, 8);
 }
-$w = toy_test_tensor([$m, $k], $wv)->cast('q8_0');
-$x = toy_test_tensor([$k, $n], $xv);
-$out = toy_test_floats(Toy\Tensor\matmul_q8_0_f32($w, $x, $m, $n, $k));
-$blocks = toy_test_q8_blocks($w->toBytes());
-[$ref, $absSums] = toy_test_q8_matmul_ref($blocks, $xv, $m, $n, $k);
-var_dump(toy_test_q8_metrics($out, $ref, $absSums)['maxScaled'] < 4e-6);
+$w = test_tensor([$m, $k], $wv)->cast('q8_0');
+$x = test_tensor([$k, $n], $xv);
+$out = test_floats(Toy\Tensor\matmul_q8_0_f32($w, $x, $m, $n, $k));
+$blocks = test_q8_blocks($w->toBytes());
+[$ref, $absSums] = test_q8_matmul_ref($blocks, $xv, $m, $n, $k);
+var_dump(test_q8_metrics($out, $ref, $absSums)['maxScaled'] < 4e-6);
 
 echo "done\n";
 ?>
