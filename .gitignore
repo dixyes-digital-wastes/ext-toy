@@ -4,10 +4,12 @@
 /build/
 /config.h
 /config.h.in
+/config.h.in~
 /config.log
 /config.nice
 /config.status
 /configure
+/configure~
 /configure.ac
 /libtool
 /Makefile
@@ -21,6 +23,7 @@
 *.dep
 *.la
 *.lo
+*.loT
 *.o
 
 # coverage build artifacts
