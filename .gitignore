@@ -23,6 +23,15 @@
 *.lo
 *.o
 
+# coverage build artifacts
+*.gcda
+*.gcno
+*.gcov
+*.gcov.json.gz
+/coverage/out/
+__pycache__/
+*.pyc
+
 # run-tests work files
 /tests/*.diff
 /tests/*.exp
