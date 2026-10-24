@@ -63,6 +63,8 @@ static uint8_t kernel_op(uint8_t kind)
     switch (kind) {
         case TOY_KERNEL_ADD:
             return TOY_OP_ADD;
+        case TOY_KERNEL_MUL:
+            return TOY_OP_MUL;
         case TOY_KERNEL_SCALE:
             return TOY_OP_SCALE;
         case TOY_KERNEL_RMSNORM:

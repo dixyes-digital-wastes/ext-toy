@@ -20,6 +20,7 @@ enum op {
     TOY_OP_Q8_0_DOT = 7,
     TOY_OP_Q8_0_MATVEC = 8,
     TOY_OP_Q8_0_MATMUL = 9,
+    TOY_OP_MUL = 10,
 };
 
 enum isa {
@@ -36,6 +37,7 @@ enum isa {
  * DOT:    k is the length, m and n must be 1
  *
  * ADD:     m is the element count, n and k must be 1, param_bits is unused
+ * MUL:     m is the element count, n and k must be 1, param_bits is unused
  * SCALE:   m is the element count, param_bits holds the f32 factor bits
  * RMSNORM: m is the element count, param_bits holds the f32 eps bits
  *

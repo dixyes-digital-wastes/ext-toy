@@ -371,6 +371,7 @@ static uint32_t float_bits(float value) {
 
 /*
  * ADD:   c[i] = a[i] + b[i]
+ * MUL:   c[i] = a[i] * b[i]
  * SCALE: c[i] = a[i] * param
  *
  * wide selects 8 lanes of AVX2, otherwise the code works on one element. The
@@ -384,6 +385,7 @@ static void emit_element_binary(struct assembler *as, uint32_t op, uint32_t coun
     const uint32_t step = wide ? 8u : 1u;
     const uint32_t main = count - (count % step);
     const bool scale = op == TOY_OP_SCALE;
+    const bool mul = op == TOY_OP_MUL;
 
     if (scale) {
         // Broadcast the factor into xmm7 or ymm7
@@ -411,12 +413,20 @@ static void emit_element_binary(struct assembler *as, uint32_t op, uint32_t coun
             if (wide) {
                 asm_vmovups_load_ymm(as, TOY_YMM0, mem_index(TOY_RDI, TOY_RAX, 4, 0));
                 asm_vmovups_load_ymm(as, TOY_YMM1, mem_index(TOY_RSI, TOY_RAX, 4, 0));
-                asm_vaddps(as, true, TOY_YMM0, TOY_YMM0, TOY_YMM1);
+                if (mul) {
+                    asm_vmulps(as, true, TOY_YMM0, TOY_YMM0, TOY_YMM1);
+                } else {
+                    asm_vaddps(as, true, TOY_YMM0, TOY_YMM0, TOY_YMM1);
+                }
                 asm_vmovups_store_ymm(as, mem_index(TOY_RDX, TOY_RAX, 4, 0), TOY_YMM0);
             } else {
                 asm_vmovss_load(as, TOY_XMM0, mem_index(TOY_RDI, TOY_RAX, 4, 0));
                 asm_vmovss_load(as, TOY_XMM1, mem_index(TOY_RSI, TOY_RAX, 4, 0));
-                asm_vaddps(as, false, TOY_XMM0, TOY_XMM0, TOY_XMM1);
+                if (mul) {
+                    asm_vmulps(as, false, TOY_XMM0, TOY_XMM0, TOY_XMM1);
+                } else {
+                    asm_vaddps(as, false, TOY_XMM0, TOY_XMM0, TOY_XMM1);
+                }
                 asm_vmovss_store(as, mem_index(TOY_RDX, TOY_RAX, 4, 0), TOY_XMM0);
             }
         }
@@ -433,7 +443,11 @@ static void emit_element_binary(struct assembler *as, uint32_t op, uint32_t coun
         } else {
             asm_vmovss_load(as, TOY_XMM0, mem_index(TOY_RDI, TOY_RAX, 4, 0));
             asm_vmovss_load(as, TOY_XMM1, mem_index(TOY_RSI, TOY_RAX, 4, 0));
-            asm_vaddps(as, false, TOY_XMM0, TOY_XMM0, TOY_XMM1);
+            if (mul) {
+                asm_vmulps(as, false, TOY_XMM0, TOY_XMM0, TOY_XMM1);
+            } else {
+                asm_vaddps(as, false, TOY_XMM0, TOY_XMM0, TOY_XMM1);
+            }
             asm_vmovss_store(as, mem_index(TOY_RDX, TOY_RAX, 4, 0), TOY_XMM0);
         }
         asm_add_imm(as, TOY_RAX, 1);
@@ -753,7 +767,7 @@ static bool spec_valid(const struct spec *spec) {
     if (spec == NULL) {
         return false;
     }
-    if (spec->op < TOY_OP_GEMM || spec->op > TOY_OP_Q8_0_MATMUL) {
+    if (spec->op < TOY_OP_GEMM || spec->op > TOY_OP_MUL) {
         return false;
     }
     if (spec->isa != TOY_ISA_SCALAR && spec->isa != TOY_ISA_AVX2) {
@@ -885,6 +899,7 @@ size_t emit(const struct spec *spec, uint8_t *buf, size_t cap) {
             }
             break;
         case TOY_OP_ADD:
+        case TOY_OP_MUL:
         case TOY_OP_SCALE:
             emit_element_binary(&as, spec->op, spec->m, wide, spec->param_bits);
             break;
@@ -909,6 +924,7 @@ const char *op_name(uint32_t op) {
         case TOY_OP_MATVEC: return "matvec";
         case TOY_OP_DOT: return "dot";
         case TOY_OP_ADD: return "add";
+        case TOY_OP_MUL: return "mul";
         case TOY_OP_SCALE: return "scale";
         case TOY_OP_RMSNORM: return "rmsnorm";
         case TOY_OP_Q8_0_DOT: return "q8_0_dot";
@@ -941,6 +957,7 @@ double spec_flops(const struct spec *spec) {
         case TOY_OP_Q8_0_DOT:
             return 2.0 * spec->k;
         case TOY_OP_ADD: return 2.0 * spec->m;
+        case TOY_OP_MUL: return 1.0 * spec->m;
         case TOY_OP_SCALE: return 1.0 * spec->m;
         case TOY_OP_RMSNORM: return 4.0 * spec->m;
         default: return 0.0;

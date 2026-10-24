@@ -35,9 +35,22 @@ void ref_add_f32(const float *a, const float *b, float *c, size_t count) {
     }
 }
 
+void ref_mul_f32(const float *a, const float *b, float *c, size_t count) {
+    for (size_t i = 0; i < count; i++) {
+        c[i] = a[i] * b[i];
+    }
+}
+
 void ref_scale_f32(const float *a, float factor, float *c, size_t count) {
     for (size_t i = 0; i < count; i++) {
         c[i] = a[i] * factor;
+    }
+}
+
+/* SiLU: c = a * (1 / (1 + exp(-a))) */
+void ref_silu_f32(const float *a, float *c, size_t count) {
+    for (size_t i = 0; i < count; i++) {
+        c[i] = a[i] * (1.0f / (1.0f + expf(-a[i])));
     }
 }
 

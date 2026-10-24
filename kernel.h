@@ -27,6 +27,7 @@ typedef enum kernel_kind {
     TOY_KERNEL_MATVEC = 5,
     TOY_KERNEL_MATMUL_Q8_0 = 6,
     TOY_KERNEL_MATVEC_Q8_0 = 7,
+    TOY_KERNEL_MUL = 8,
 } kernel_kind;
 
 typedef struct kernel_stats {

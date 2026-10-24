@@ -1,6 +1,6 @@
 # toy
 
-A PHP extension that provides the `Toy\Tensor` class and 8 tensor operators.
+A PHP extension that provides the `Toy\Tensor` class and 10 tensor operators.
 
 ## Requirements
 
@@ -40,9 +40,11 @@ The output of `php -m` must contain `toy`.
 $a = Toy\Tensor::full('f32', [4], 1.0);
 $b = Toy\Tensor::full('f32', [4], 2.0);
 
-// add and scale
+// add, mul, scale and silu
 $sum = Toy\Tensor\add($a, $b);
+$product = Toy\Tensor\mul($a, $b);
 $scaled = Toy\Tensor\scale($sum, 3.0);
+$activated = Toy\Tensor\silu($product);
 
 // Optional out tensor: the result goes into $out
 $out = Toy\Tensor::zeros('f32', [4]);

@@ -21,7 +21,9 @@ void ref_matvec(uint32_t m, uint32_t k, const float *w, const float *x, float *y
 void ref_dot(uint32_t k, const float *x, const float *y, float *out);
 
 void ref_add_f32(const float *a, const float *b, float *c, size_t count);
+void ref_mul_f32(const float *a, const float *b, float *c, size_t count);
 void ref_scale_f32(const float *a, float factor, float *c, size_t count);
+void ref_silu_f32(const float *a, float *c, size_t count);
 void ref_rmsnorm_f32(const float *x, const float *w, float *out, uint32_t n, float eps);
 
 /*

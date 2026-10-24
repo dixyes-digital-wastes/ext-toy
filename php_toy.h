@@ -58,7 +58,9 @@ PHP_FUNCTION(tensor_matvec_f32);
 PHP_FUNCTION(tensor_matmul_q8_0_f32);
 PHP_FUNCTION(tensor_matvec_q8_0_f32);
 PHP_FUNCTION(tensor_add);
+PHP_FUNCTION(tensor_mul);
 PHP_FUNCTION(tensor_scale);
+PHP_FUNCTION(tensor_silu);
 PHP_FUNCTION(tensor_rmsnorm);
 PHP_FUNCTION(tensor_rmsnorm_into);
 
