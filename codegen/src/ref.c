@@ -358,3 +358,74 @@ void ref_q8_0_matmul_acc64(uint32_t m, uint32_t n, uint32_t k,
         }
     }
 }
+
+/*
+ * q8_0 against q8_0: the ggml lane order, see mul_sum_i8_pairs_float and
+ * hsum_float_8 in ggml/src/ggml-cpu/arch/x86/quants.c
+ *
+ * The int8 products of one block split into 8 lanes of 4 adjacent values, so
+ * every lane is an exact int32 sum. The combined f16 scale then accumulates
+ * into the lanes with one fma each, and the final reduction is the ggml tree
+ *
+ * The pair product follows vpsignb and vpmaddubsw: the weight byte becomes an
+ * unsigned magnitude and the activation byte is negated when the weight is
+ * negative, so two -128 bytes give -16384. A quantizer never emits -128, so
+ * this only matters for hand-built bytes, and it keeps both paths identical
+ */
+static int32_t ref_q8_0_pair(int8_t weight, int8_t value) {
+    const int32_t magnitude = weight < 0 ? -(int32_t)weight : (int32_t)weight;
+    // The negation wraps in int8, the same as vpsignb
+    const int32_t signed_value = weight < 0 ? (int8_t)(-(int32_t)value) : (int32_t)value;
+
+    return magnitude * signed_value;
+}
+
+static float ref_q8_0_q8_0_row(const struct q8_0_block *w, const struct q8_0_block *x,
+                               uint32_t blocks) {
+    float lanes[8] = { 0.0f };
+
+    for (uint32_t b = 0; b < blocks; b++) {
+        const float d = f16_to_f32(w[b].d) * f16_to_f32(x[b].d);
+        for (int lane = 0; lane < 8; lane++) {
+            int32_t sum = 0;
+            for (int i = 0; i < 4; i++) {
+                const int index = 4 * lane + i;
+                sum += ref_q8_0_pair(w[b].qs[index], x[b].qs[index]);
+            }
+            lanes[lane] = fmaf(d, (float)sum, lanes[lane]);
+        }
+    }
+
+    // hsum_float_8: add the halves, then the pairs, then the last two lanes
+    const float half0 = lanes[0] + lanes[4];
+    const float half1 = lanes[1] + lanes[5];
+    const float half2 = lanes[2] + lanes[6];
+    const float half3 = lanes[3] + lanes[7];
+
+    return (half0 + half2) + (half1 + half3);
+}
+
+void ref_q8_0_q8_0_matvec(uint32_t m, uint32_t k, const void *w, const void *x,
+                          float *y) {
+    const uint32_t blocks = k / TOY_Q8_0_BLOCK;
+    const struct q8_0_block *wp = w;
+    const struct q8_0_block *xp = x;
+
+    for (uint32_t i = 0; i < m; i++) {
+        y[i] = ref_q8_0_q8_0_row(wp + (size_t)i * blocks, xp, blocks);
+    }
+}
+
+void ref_q8_0_q8_0_matmul(uint32_t m, uint32_t n, uint32_t k,
+                          const void *w, const void *x, float *c) {
+    const uint32_t blocks = k / TOY_Q8_0_BLOCK;
+    const struct q8_0_block *wp = w;
+    const struct q8_0_block *xp = x;
+
+    for (uint32_t j = 0; j < n; j++) {
+        const struct q8_0_block *column = xp + (size_t)j * blocks;
+        for (uint32_t i = 0; i < m; i++) {
+            c[(size_t)i * n + j] = ref_q8_0_q8_0_row(wp + (size_t)i * blocks, column, blocks);
+        }
+    }
+}

@@ -306,6 +306,10 @@ void asm_vmovss_store(struct assembler *as, struct mem mem, uint8_t src) {
     emit_vex(as, 1, 2, false, false, 0, src, true, &mem, 0, 0x11);
 }
 
+void asm_vmulss(struct assembler *as, uint8_t dst, uint8_t src1, uint8_t src2) {
+    emit_vex(as, 1, 2, false, false, src1, dst, false, NULL, src2, 0x59);
+}
+
 void asm_vbroadcastss(struct assembler *as, uint8_t dst, struct mem mem) {
     emit_vex(as, 2, 1, true, false, 0, dst, true, &mem, 0, 0x18);
 }
@@ -345,6 +349,18 @@ void asm_vpmovsxbd(struct assembler *as, bool wide, uint8_t dst, struct mem mem)
 
 void asm_vcvtdq2ps(struct assembler *as, bool wide, uint8_t dst, uint8_t src) {
     emit_vex(as, 1, 0, wide, false, 0, dst, false, NULL, src, 0x5B);
+}
+
+void asm_vpsignb(struct assembler *as, bool wide, uint8_t dst, uint8_t src1, uint8_t src2) {
+    emit_vex(as, 2, 1, wide, false, src1, dst, false, NULL, src2, 0x08);
+}
+
+void asm_vpmaddubsw(struct assembler *as, bool wide, uint8_t dst, uint8_t src1, uint8_t src2) {
+    emit_vex(as, 2, 1, wide, false, src1, dst, false, NULL, src2, 0x04);
+}
+
+void asm_vpmaddwd(struct assembler *as, bool wide, uint8_t dst, uint8_t src1, uint8_t src2) {
+    emit_vex(as, 1, 1, wide, false, src1, dst, false, NULL, src2, 0xF5);
 }
 
 void asm_vcvtph2ps(struct assembler *as, uint8_t dst, struct mem mem) {

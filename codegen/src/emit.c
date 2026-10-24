@@ -530,7 +530,8 @@ static void emit_rmsnorm(struct assembler *as, uint32_t n, bool wide, uint32_t e
 /* ---------- q8_0 ---------- */
 
 static bool op_is_q8_0(uint32_t op) {
-    return op >= TOY_OP_Q8_0_DOT && op <= TOY_OP_Q8_0_MATMUL;
+    return (op >= TOY_OP_Q8_0_DOT && op <= TOY_OP_Q8_0_MATMUL)
+        || op == TOY_OP_Q8_0_Q8_0_MATVEC || op == TOY_OP_Q8_0_Q8_0_MATMUL;
 }
 
 /*
@@ -763,11 +764,156 @@ static void emit_q8_avx2_matmul(struct assembler *as, uint32_t m, uint32_t n, ui
     emit_q8_scalar(as, m, n - n16, n, k, n16, 6, 7, 8);
 }
 
+/* ---------- q8_0 weights against q8_0 activations ---------- */
+
+/*
+ * The kernel reproduces the ggml lane order exactly: the 32 int8 products of a
+ * block split into 8 int32 lanes of 4 adjacent values, the combined f16 scale
+ * accumulates into every lane with one fma, and hsum_float_8 reduces the lanes
+ * once at the end
+ *
+ * One activation column is a series of 34-byte blocks, the weights are m such
+ * series. A row group of 8 rows shares one activation block, so Q8Q8_ACT and
+ * Q8Q8_XD hold it for the whole group
+ */
+enum {
+    // Accumulators hold 8 rows. The ones vector lives across groups, so it
+    // avoids xmm9, the scratch register of the horizontal sum
+    Q8Q8_ROWS = 8,
+    Q8Q8_ACT = 8,
+    Q8Q8_D = 10,
+    Q8Q8_W = 11,
+    Q8Q8_T = 12,
+    Q8Q8_S = 13,
+    Q8Q8_ONES = 14,
+    Q8Q8_XD = 15,
+    // Labels of the outer loops and of one block loop per row group
+    Q8Q8_LABEL_GROUP = 0,
+    Q8Q8_LABEL_COLUMN = 1,
+    Q8Q8_LABEL_TAIL_COLUMN = 2,
+    Q8Q8_LABEL_BLOCK = 3,
+    Q8Q8_LABEL_TAIL_BLOCK = 4,
+};
+
+/*
+ * One weight row of the current group: r8 + r10 is the block of the row, so
+ * rowDisp is r * rowBytes
+ */
+static void emit_q8_q8_row(struct assembler *as, uint8_t acc, int32_t rowDisp) {
+    asm_vcvtph2ps(as, Q8Q8_D, mem_index(TOY_R8, TOY_R10, 1, rowDisp));
+    asm_vmulss(as, Q8Q8_D, Q8Q8_D, Q8Q8_XD);
+    asm_vbroadcastss_reg(as, Q8Q8_D, Q8Q8_D);
+    asm_vmovups_load_ymm(as, Q8Q8_W, mem_index(TOY_R8, TOY_R10, 1, rowDisp + 2));
+    asm_vpsignb(as, true, Q8Q8_T, Q8Q8_W, Q8Q8_W);
+    asm_vpsignb(as, true, Q8Q8_S, Q8Q8_ACT, Q8Q8_W);
+    asm_vpmaddubsw(as, true, Q8Q8_T, Q8Q8_T, Q8Q8_S);
+    asm_vpmaddwd(as, true, Q8Q8_T, Q8Q8_T, Q8Q8_ONES);
+    asm_vcvtdq2ps(as, true, Q8Q8_T, Q8Q8_T);
+    asm_vfmadd231ps(as, acc, Q8Q8_D, Q8Q8_T);
+}
+
+/*
+ * Zero rows accumulators, run the block loop and store one row per accumulator
+ * r8 is the weight base of the group, r11 the activation column, r9 the output
+ * base of the group and rcx the column, so the store is c + row * outStride + column
+ */
+static void emit_q8_q8_group(struct assembler *as, uint32_t rows, uint32_t blocks,
+                             int32_t rowBytes, int32_t outStride, uint8_t blockLabel) {
+    for (uint8_t r = 0; r < rows; r++) {
+        asm_vxorps(as, true, r, r, r);
+    }
+    asm_xor_rr(as, TOY_R10, TOY_R10);
+    if (blocks > 1) {
+        asm_label(as, blockLabel);
+    }
+    asm_vcvtph2ps(as, Q8Q8_XD, mem_index(TOY_R11, TOY_R10, 1, 0));
+    asm_vmovups_load_ymm(as, Q8Q8_ACT, mem_index(TOY_R11, TOY_R10, 1, 2));
+    for (uint8_t r = 0; r < rows; r++) {
+        emit_q8_q8_row(as, r, (int32_t)(r * rowBytes));
+    }
+    if (blocks > 1) {
+        asm_add_imm(as, TOY_R10, TOY_Q8_0_BLOCK_BYTES);
+        // One row and one activation column have the same byte length
+        asm_cmp_imm(as, TOY_R10, rowBytes);
+        asm_jcc(as, TOY_CC_NE, blockLabel);
+    }
+    for (uint8_t r = 0; r < rows; r++) {
+        emit_reduce_ymm_to_xmm(as, r);
+        asm_vmovss_store(as, mem_index(TOY_R9, TOY_RCX, 4, (int32_t)(r * outStride)), r);
+    }
+}
+
+/*
+ * AVX2 q8_0 x q8_0 for m rows, n columns and k values
+ *
+ * Rows run in groups of 8 and the column loop sits inside, so the weight block
+ * of a row group is decoded again from L1 for every column and the weight
+ * stream touches memory once
+ */
+static void emit_q8_q8_avx2(struct assembler *as, uint32_t m, uint32_t n, uint32_t k) {
+    const uint32_t blocks = k / TOY_Q8_0_BLOCK;
+    const uint32_t groups = m / Q8Q8_ROWS;
+    const uint32_t tail = m - groups * Q8Q8_ROWS;
+    const int32_t rowBytes = (int32_t)(blocks * TOY_Q8_0_BLOCK_BYTES);
+    const int32_t outStride = (int32_t)(n * 4);
+    const int32_t groupBytes = (int32_t)(Q8Q8_ROWS * blocks * TOY_Q8_0_BLOCK_BYTES);
+    const int32_t groupOut = (int32_t)(Q8Q8_ROWS * n * 4);
+
+    // int16 ones turn the pair sums into int32 lanes
+    asm_mov_imm32(as, TOY_RAX, 0x0001'0001);
+    asm_vmovd_gpr(as, Q8Q8_ONES, TOY_RAX);
+    asm_vbroadcastss_reg(as, Q8Q8_ONES, Q8Q8_ONES);
+
+    if (groups != 0) {
+        asm_mov_rr(as, TOY_R8, TOY_RDI);
+        asm_mov_rr(as, TOY_R9, TOY_RDX);
+        asm_xor_rr(as, TOY_RAX, TOY_RAX);
+        asm_label(as, Q8Q8_LABEL_GROUP);
+        asm_mov_rr(as, TOY_R11, TOY_RSI);
+        asm_xor_rr(as, TOY_RCX, TOY_RCX);
+        if (n > 1) {
+            asm_label(as, Q8Q8_LABEL_COLUMN);
+        }
+        emit_q8_q8_group(as, Q8Q8_ROWS, blocks, rowBytes, outStride, Q8Q8_LABEL_BLOCK);
+        if (n > 1) {
+            asm_add_imm(as, TOY_R11, rowBytes);
+            asm_add_imm(as, TOY_RCX, 1);
+            asm_cmp_imm(as, TOY_RCX, (int32_t)n);
+            asm_jcc(as, TOY_CC_NE, Q8Q8_LABEL_COLUMN);
+        }
+        asm_add_imm(as, TOY_R8, groupBytes);
+        asm_add_imm(as, TOY_R9, groupOut);
+        asm_add_imm(as, TOY_RAX, 1);
+        if (groups > 1) {
+            asm_cmp_imm(as, TOY_RAX, (int32_t)groups);
+            asm_jcc(as, TOY_CC_NE, Q8Q8_LABEL_GROUP);
+        }
+    }
+
+    if (tail != 0) {
+        // The tail starts after the whole groups
+        asm_lea(as, TOY_R8, mem_base(TOY_RDI, (int32_t)(groups * Q8Q8_ROWS) * rowBytes));
+        asm_lea(as, TOY_R9, mem_base(TOY_RDX, (int32_t)(groups * Q8Q8_ROWS) * outStride));
+        asm_mov_rr(as, TOY_R11, TOY_RSI);
+        asm_xor_rr(as, TOY_RCX, TOY_RCX);
+        if (n > 1) {
+            asm_label(as, Q8Q8_LABEL_TAIL_COLUMN);
+        }
+        emit_q8_q8_group(as, tail, blocks, rowBytes, outStride, Q8Q8_LABEL_TAIL_BLOCK);
+        if (n > 1) {
+            asm_add_imm(as, TOY_R11, rowBytes);
+            asm_add_imm(as, TOY_RCX, 1);
+            asm_cmp_imm(as, TOY_RCX, (int32_t)n);
+            asm_jcc(as, TOY_CC_NE, Q8Q8_LABEL_TAIL_COLUMN);
+        }
+    }
+}
+
 static bool spec_valid(const struct spec *spec) {
     if (spec == NULL) {
         return false;
     }
-    if (spec->op < TOY_OP_GEMM || spec->op > TOY_OP_MUL) {
+    if (spec->op < TOY_OP_GEMM || spec->op > TOY_OP_Q8_0_Q8_0_MATMUL) {
         return false;
     }
     if (spec->isa != TOY_ISA_SCALAR && spec->isa != TOY_ISA_AVX2) {
@@ -787,7 +933,7 @@ static bool spec_valid(const struct spec *spec) {
         if (spec->op == TOY_OP_Q8_0_DOT && (m != 1 || n != 1)) {
             return false;
         }
-        if (spec->op == TOY_OP_Q8_0_MATVEC && n != 1) {
+        if ((spec->op == TOY_OP_Q8_0_MATVEC || spec->op == TOY_OP_Q8_0_Q8_0_MATVEC) && n != 1) {
             return false;
         }
         const uint64_t rowBytes = (k / TOY_Q8_0_BLOCK) * TOY_Q8_0_BLOCK_BYTES;
@@ -846,8 +992,11 @@ size_t emit(const struct spec *spec, uint8_t *buf, size_t cap) {
                     emit_q8_scalar(&as, 1, 1, 1, spec->k, 0, 0, 1, 2);
                 } else if (spec->op == TOY_OP_Q8_0_MATVEC) {
                     emit_q8_scalar(&as, spec->m, 1, 1, spec->k, 0, 0, 1, 2);
-                } else {
+                } else if (spec->op == TOY_OP_Q8_0_MATMUL) {
                     emit_q8_scalar(&as, spec->m, spec->n, spec->n, spec->k, 0, 0, 1, 2);
+                } else {
+                    // No scalar kernel for q8_0 x q8_0, see spec_supported
+                    return 0;
                 }
                 break;
             case TOY_ISA_AVX2:
@@ -855,8 +1004,12 @@ size_t emit(const struct spec *spec, uint8_t *buf, size_t cap) {
                     emit_q8_avx2_dotmatvec(&as, 1, spec->k);
                 } else if (spec->op == TOY_OP_Q8_0_MATVEC) {
                     emit_q8_avx2_dotmatvec(&as, spec->m, spec->k);
-                } else {
+                } else if (spec->op == TOY_OP_Q8_0_MATMUL) {
                     emit_q8_avx2_matmul(&as, spec->m, spec->n, spec->k);
+                } else if (spec->op == TOY_OP_Q8_0_Q8_0_MATVEC) {
+                    emit_q8_q8_avx2(&as, spec->m, 1, spec->k);
+                } else {
+                    emit_q8_q8_avx2(&as, spec->m, spec->n, spec->k);
                 }
                 break;
         }
@@ -930,6 +1083,8 @@ const char *op_name(uint32_t op) {
         case TOY_OP_Q8_0_DOT: return "q8_0_dot";
         case TOY_OP_Q8_0_MATVEC: return "q8_0_matvec";
         case TOY_OP_Q8_0_MATMUL: return "q8_0_matmul";
+        case TOY_OP_Q8_0_Q8_0_MATVEC: return "q8_0_q8_0_matvec";
+        case TOY_OP_Q8_0_Q8_0_MATMUL: return "q8_0_q8_0_matmul";
         default: return "unknown";
     }
 }
@@ -949,9 +1104,11 @@ double spec_flops(const struct spec *spec) {
     switch (spec->op) {
         case TOY_OP_GEMM:
         case TOY_OP_Q8_0_MATMUL:
+        case TOY_OP_Q8_0_Q8_0_MATMUL:
             return 2.0 * spec->m * spec->n * spec->k;
         case TOY_OP_MATVEC:
         case TOY_OP_Q8_0_MATVEC:
+        case TOY_OP_Q8_0_Q8_0_MATVEC:
             return 2.0 * spec->m * spec->k;
         case TOY_OP_DOT:
         case TOY_OP_Q8_0_DOT:

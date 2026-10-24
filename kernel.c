@@ -77,6 +77,10 @@ static uint8_t kernel_op(uint8_t kind)
             return TOY_OP_Q8_0_MATMUL;
         case TOY_KERNEL_MATVEC_Q8_0:
             return TOY_OP_Q8_0_MATVEC;
+        case TOY_KERNEL_MATMUL_Q8_0_Q8_0:
+            return TOY_OP_Q8_0_Q8_0_MATMUL;
+        case TOY_KERNEL_MATVEC_Q8_0_Q8_0:
+            return TOY_OP_Q8_0_Q8_0_MATVEC;
         default:
             return 0;
     }

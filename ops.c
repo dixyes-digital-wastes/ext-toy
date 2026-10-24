@@ -11,6 +11,7 @@
 #include <string.h>
 
 #include "toy/codegen.h"
+#include "toy/q8_0.h"
 #include "toy/ref.h"
 
 static const double rmsnorm_default_eps = 1e-6;
@@ -42,6 +43,23 @@ ZEND_BEGIN_ARG_WITH_RETURN_OBJ_INFO_EX(arginfo_tensor_matmul_q8_0_f32, 0, 5, Toy
 ZEND_END_ARG_INFO()
 
 ZEND_BEGIN_ARG_WITH_RETURN_OBJ_INFO_EX(arginfo_tensor_matvec_q8_0_f32, 0, 4, Toy\\Tensor, 0)
+    ZEND_ARG_OBJ_INFO(0, w, Toy\\Tensor, 0)
+    ZEND_ARG_OBJ_INFO(0, x, Toy\\Tensor, 0)
+    ZEND_ARG_TYPE_INFO(0, m, IS_LONG, 0)
+    ZEND_ARG_TYPE_INFO(0, k, IS_LONG, 0)
+    ZEND_ARG_OBJ_INFO_WITH_DEFAULT_VALUE(0, out, Toy\\Tensor, 1, "null")
+ZEND_END_ARG_INFO()
+
+ZEND_BEGIN_ARG_WITH_RETURN_OBJ_INFO_EX(arginfo_tensor_matmul_q8_0_q8_0, 0, 5, Toy\\Tensor, 0)
+    ZEND_ARG_OBJ_INFO(0, w, Toy\\Tensor, 0)
+    ZEND_ARG_OBJ_INFO(0, x, Toy\\Tensor, 0)
+    ZEND_ARG_TYPE_INFO(0, m, IS_LONG, 0)
+    ZEND_ARG_TYPE_INFO(0, n, IS_LONG, 0)
+    ZEND_ARG_TYPE_INFO(0, k, IS_LONG, 0)
+    ZEND_ARG_OBJ_INFO_WITH_DEFAULT_VALUE(0, out, Toy\\Tensor, 1, "null")
+ZEND_END_ARG_INFO()
+
+ZEND_BEGIN_ARG_WITH_RETURN_OBJ_INFO_EX(arginfo_tensor_matvec_q8_0_q8_0, 0, 4, Toy\\Tensor, 0)
     ZEND_ARG_OBJ_INFO(0, w, Toy\\Tensor, 0)
     ZEND_ARG_OBJ_INFO(0, x, Toy\\Tensor, 0)
     ZEND_ARG_TYPE_INFO(0, m, IS_LONG, 0)
@@ -153,6 +171,10 @@ const zend_function_entry module_functions[] = {
                      arginfo_tensor_matmul_q8_0_f32)
     ZEND_NS_NAMED_FE("Toy\\Tensor", matvec_q8_0_f32, zif_tensor_matvec_q8_0_f32,
                      arginfo_tensor_matvec_q8_0_f32)
+    ZEND_NS_NAMED_FE("Toy\\Tensor", matmul_q8_0_q8_0, zif_tensor_matmul_q8_0_q8_0,
+                     arginfo_tensor_matmul_q8_0_q8_0)
+    ZEND_NS_NAMED_FE("Toy\\Tensor", matvec_q8_0_q8_0, zif_tensor_matvec_q8_0_q8_0,
+                     arginfo_tensor_matvec_q8_0_q8_0)
     TOY_NS_FRAMELESS_FE("Toy\\Tensor", add, zif_tensor_add,
                         arginfo_tensor_add, frameless_function_infos_tensor_add)
     TOY_NS_FRAMELESS_FE("Toy\\Tensor", mul, zif_tensor_mul,
@@ -820,6 +842,116 @@ static bool php_tensor_matvec_q8_0_impl(tensor *w, tensor *x, uint32_t m,
     return php_tensor_wrap(return_value, result) == SUCCESS;
 }
 
+/*
+ * A q8_0 activation holds one vector of k values per column, so k must be a
+ * whole number of value blocks
+ */
+static bool php_tensor_require_block_multiple(uint32_t k, uint32_t arg_num)
+{
+    if (k % TOY_Q8_0_BLOCK == 0) {
+        return true;
+    }
+    zend_argument_value_error(arg_num, "must be a multiple of %d",
+                              (int) TOY_Q8_0_BLOCK);
+    return false;
+}
+
+static bool php_tensor_matmul_q8_0_q8_0_impl(tensor *w, tensor *x, uint32_t m,
+                                             uint32_t n, uint32_t k, zval *out_value,
+                                             zval *return_value)
+{
+    if (!php_tensor_require_q8_0(w, 1) || !php_tensor_require_q8_0(x, 2)
+        || !php_tensor_require_block_multiple(k, 5)
+        || !php_tensor_expect_rank2(w, 1, m, k)
+        || !php_tensor_expect_rank2(x, 2, k, n)) {
+        return false;
+    }
+
+    uint32_t dims[TOY_TENSOR_MAX_DIMS] = { m, n, 0, 0 };
+    tensor *out = NULL;
+    if (out_value != NULL && !php_tensor_optional_out(out_value, 6, &out)) {
+        return false;
+    }
+    if (out != NULL
+        && (!php_tensor_out_matches(out, 2, dims, 6)
+            || !php_tensor_out_disjoint_check(out, w, x, 6, 1, 2))) {
+        return false;
+    }
+
+    tensor *result = out;
+    if (result == NULL) {
+        result = php_tensor_alloc_result(2, dims);
+        if (result == NULL) {
+            return false;
+        }
+    }
+
+    kernel_entry kernel = kernel_for_shape(TOY_KERNEL_MATMUL_Q8_0_Q8_0, TOY_DTYPE_Q8_0,
+                                           m, n, k);
+    if (kernel != NULL) {
+        kernel(tensor_data(w), tensor_data(x), tensor_data(result));
+        kernel_count_kernel_call();
+    } else {
+        ref_q8_0_q8_0_matmul(m, n, k, tensor_data(w), tensor_data(x),
+                             tensor_data(result));
+        kernel_count_scalar_call();
+    }
+
+    if (out != NULL) {
+        ZVAL_OBJ_COPY(return_value, Z_OBJ_P(out_value));
+        return true;
+    }
+    return php_tensor_wrap(return_value, result) == SUCCESS;
+}
+
+static bool php_tensor_matvec_q8_0_q8_0_impl(tensor *w, tensor *x, uint32_t m,
+                                             uint32_t k, zval *out_value,
+                                             zval *return_value)
+{
+    if (!php_tensor_require_q8_0(w, 1) || !php_tensor_require_q8_0(x, 2)
+        || !php_tensor_require_block_multiple(k, 4)
+        || !php_tensor_expect_rank2(w, 1, m, k)
+        || !php_tensor_expect_rank1(x, 2, k)) {
+        return false;
+    }
+
+    uint32_t dims[TOY_TENSOR_MAX_DIMS] = { m, 0, 0, 0 };
+    tensor *out = NULL;
+    if (out_value != NULL && !php_tensor_optional_out(out_value, 5, &out)) {
+        return false;
+    }
+    if (out != NULL
+        && (!php_tensor_out_matches(out, 1, dims, 5)
+            || !php_tensor_out_disjoint_check(out, w, x, 5, 1, 2))) {
+        return false;
+    }
+
+    tensor *result = out;
+    if (result == NULL) {
+        result = php_tensor_alloc_result(1, dims);
+        if (result == NULL) {
+            return false;
+        }
+    }
+
+    kernel_entry kernel = kernel_for_shape(TOY_KERNEL_MATVEC_Q8_0_Q8_0, TOY_DTYPE_Q8_0,
+                                           m, 1, k);
+    if (kernel != NULL) {
+        kernel(tensor_data(w), tensor_data(x), tensor_data(result));
+        kernel_count_kernel_call();
+    } else {
+        ref_q8_0_q8_0_matvec(m, k, tensor_data(w), tensor_data(x),
+                             tensor_data(result));
+        kernel_count_scalar_call();
+    }
+
+    if (out != NULL) {
+        ZVAL_OBJ_COPY(return_value, Z_OBJ_P(out_value));
+        return true;
+    }
+    return php_tensor_wrap(return_value, result) == SUCCESS;
+}
+
 PHP_FUNCTION(tensor_matmul_f32)
 {
     zval *a_value, *b_value, *out_value = NULL;
@@ -946,6 +1078,71 @@ PHP_FUNCTION(tensor_matvec_q8_0_f32)
         RETURN_THROWS();
     }
     if (!php_tensor_matvec_q8_0_impl(w, x, m, k, out_value, return_value)) {
+        RETURN_THROWS();
+    }
+}
+
+PHP_FUNCTION(tensor_matmul_q8_0_q8_0)
+{
+    zval *w_value, *x_value, *out_value = NULL;
+    zend_long m_arg, n_arg, k_arg;
+
+    kernel_count_zif();
+
+    ZEND_PARSE_PARAMETERS_START(5, 6)
+        Z_PARAM_OBJECT_OF_CLASS(w_value, tensor_ce)
+        Z_PARAM_OBJECT_OF_CLASS(x_value, tensor_ce)
+        Z_PARAM_LONG(m_arg)
+        Z_PARAM_LONG(n_arg)
+        Z_PARAM_LONG(k_arg)
+        Z_PARAM_OPTIONAL
+        Z_PARAM_OBJECT_OF_CLASS_OR_NULL(out_value, tensor_ce)
+    ZEND_PARSE_PARAMETERS_END();
+
+    tensor *w = php_tensor_arg(w_value);
+    tensor *x = php_tensor_arg(x_value);
+    if (!w || !x) {
+        RETURN_THROWS();
+    }
+
+    uint32_t m, n, k;
+    if (!php_tensor_dim(m_arg, &m, 3)
+        || !php_tensor_dim(n_arg, &n, 4)
+        || !php_tensor_dim(k_arg, &k, 5)) {
+        RETURN_THROWS();
+    }
+    if (!php_tensor_matmul_q8_0_q8_0_impl(w, x, m, n, k, out_value, return_value)) {
+        RETURN_THROWS();
+    }
+}
+
+PHP_FUNCTION(tensor_matvec_q8_0_q8_0)
+{
+    zval *w_value, *x_value, *out_value = NULL;
+    zend_long m_arg, k_arg;
+
+    kernel_count_zif();
+
+    ZEND_PARSE_PARAMETERS_START(4, 5)
+        Z_PARAM_OBJECT_OF_CLASS(w_value, tensor_ce)
+        Z_PARAM_OBJECT_OF_CLASS(x_value, tensor_ce)
+        Z_PARAM_LONG(m_arg)
+        Z_PARAM_LONG(k_arg)
+        Z_PARAM_OPTIONAL
+        Z_PARAM_OBJECT_OF_CLASS_OR_NULL(out_value, tensor_ce)
+    ZEND_PARSE_PARAMETERS_END();
+
+    tensor *w = php_tensor_arg(w_value);
+    tensor *x = php_tensor_arg(x_value);
+    if (!w || !x) {
+        RETURN_THROWS();
+    }
+
+    uint32_t m, k;
+    if (!php_tensor_dim(m_arg, &m, 3) || !php_tensor_dim(k_arg, &k, 4)) {
+        RETURN_THROWS();
+    }
+    if (!php_tensor_matvec_q8_0_q8_0_impl(w, x, m, k, out_value, return_value)) {
         RETURN_THROWS();
     }
 }

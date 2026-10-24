@@ -11,6 +11,47 @@ function test_tensor(array $shape, array $values): Toy\Tensor {
     return Toy\Tensor::fromBytes('f32', $shape, pack('g*', ...$values));
 }
 
+/* Packs blocks of ['d' => f16 bits, 'q' => 32 signed bytes] into q8_0 bytes */
+function test_q8_pack(array $blocks): string {
+    $data = '';
+    foreach ($blocks as $block) {
+        $data .= pack('v', $block['d']);
+        $data .= pack('C*', ...array_map(static fn (int $q): int => $q & 0xFF, $block['q']));
+    }
+    return $data;
+}
+
+/* Small signed bytes, so a block product stays far below the f32 integer limit */
+function test_q8_small(int $count, int $limit, int $seed): array {
+    $values = [];
+    for ($i = 0; $i < $count; $i++) {
+        $values[] = (($i * 7 + $seed * 13) % (2 * $limit + 1)) - $limit;
+    }
+    return $values;
+}
+
+/*
+ * Exact q8_0 x q8_0 reference for blocks whose scales are powers of two and
+ * whose bytes are small: every partial sum is representable, so double
+ * arithmetic mirrors the f32 fma chain exactly
+ *
+ * xblocks holds the blocks of one activation column
+ */
+function test_q8_q8_dot(array $wblocks, int $row, array $xblocks, int $blocks): float {
+    $total = 0;
+    for ($b = 0; $b < $blocks; $b++) {
+        $wb = $wblocks[$row * $blocks + $b];
+        $xb = $xblocks[$b];
+        $d = test_f16_to_f32($wb['d']) * test_f16_to_f32($xb['d']);
+        $laneSum = 0;
+        for ($p = 0; $p < 32; $p++) {
+            $laneSum += $wb['q'][$p] * $xb['q'][$p];
+        }
+        $total += $d * $laneSum;
+    }
+    return $total;
+}
+
 /* Rounds a double to the nearest f32, to mirror the C quantizer */
 function test_f32(float $value): float {
     return unpack('g', pack('g', $value))[1];

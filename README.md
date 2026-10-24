@@ -1,6 +1,6 @@
 # toy
 
-A PHP extension that provides the `Toy\Tensor` class and 10 tensor operators.
+A PHP extension that provides the `Toy\Tensor` class and 12 tensor operators.
 
 ## Requirements
 
@@ -54,6 +54,17 @@ Toy\Tensor\add($a, $b, $out);
 $c = Toy\Tensor::full('f32', [32], 1.0);
 $q = $c->cast('q8_0');
 $back = $q->cast('f32');
+
+// q8_0 weights against q8_0 activations. The 32 value blocks, the f16 scales
+// and the lane order follow llama.cpp
+$weights = Toy\Tensor::full('f32', [4, 64], 1.0)->cast('q8_0');
+$vector = Toy\Tensor::full('f32', [64], 2.0)->cast('q8_0');
+$matvec = Toy\Tensor\matvec_q8_0_q8_0($weights, $vector, 4, 64);
+
+// An activation matrix keeps one q8_0 vector of k values per column, so a
+// [n, k] f32 input of rows becomes a [k, n] q8_0 tensor after the cast
+$columns = Toy\Tensor::full('f32', [32, 64], 2.0)->cast('q8_0')->reshape([64, 32]);
+$matmul = Toy\Tensor\matmul_q8_0_q8_0($weights, $columns, 4, 32, 64);
 ```
 
 ## License

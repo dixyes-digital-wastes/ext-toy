@@ -165,6 +165,7 @@ void asm_vmovups_load_xmm(struct assembler *as, uint8_t dst, struct mem mem);
 void asm_vmovups_store_xmm(struct assembler *as, struct mem mem, uint8_t src);
 void asm_vmovss_load(struct assembler *as, uint8_t dst, struct mem mem);
 void asm_vmovss_store(struct assembler *as, struct mem mem, uint8_t src);
+void asm_vmulss(struct assembler *as, uint8_t dst, uint8_t src1, uint8_t src2);
 void asm_vbroadcastss(struct assembler *as, uint8_t dst, struct mem mem);
 
 void asm_vfmadd231ps(struct assembler *as, uint8_t dst, uint8_t src2, uint8_t src3);
@@ -178,6 +179,12 @@ void asm_vxorps(struct assembler *as, bool wide, uint8_t dst, uint8_t src2, uint
 
 void asm_vpmovsxbd(struct assembler *as, bool wide, uint8_t dst, struct mem mem);
 void asm_vcvtdq2ps(struct assembler *as, bool wide, uint8_t dst, uint8_t src);
+// dst = src1 with the sign of src2, a zero in src2 clears the element
+void asm_vpsignb(struct assembler *as, bool wide, uint8_t dst, uint8_t src1, uint8_t src2);
+// Unsigned src1 bytes times signed src2 bytes, adjacent pairs add with saturation
+void asm_vpmaddubsw(struct assembler *as, bool wide, uint8_t dst, uint8_t src1, uint8_t src2);
+// Signed 16-bit products, adjacent pairs add into int32 lanes
+void asm_vpmaddwd(struct assembler *as, bool wide, uint8_t dst, uint8_t src1, uint8_t src2);
 void asm_vcvtph2ps(struct assembler *as, uint8_t dst, struct mem mem);
 void asm_vhaddps(struct assembler *as, uint8_t dst, uint8_t src2, uint8_t src3);
 void asm_vpermilps(struct assembler *as, uint8_t dst, uint8_t src, uint8_t imm);

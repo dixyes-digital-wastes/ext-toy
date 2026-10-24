@@ -42,6 +42,21 @@ void ref_q8_0_matvec_acc64(uint32_t m, uint32_t k, const void *w, const float *x
 void ref_q8_0_matmul_acc64(uint32_t m, uint32_t n, uint32_t k,
                                const void *w, const float *x, float *c);
 
+/*
+ * q8_0 weights against q8_0 activations, in the ggml lane order
+ *
+ * Each block splits into 8 int32 lanes of 4 adjacent products, the combined
+ * f16 scale feeds one fma into every lane, and a fixed tree reduces the lanes
+ * at the end. The generated AVX2 kernel follows the same order, so the two
+ * paths agree bit for bit
+ *
+ * The activation holds one series of blocks per column, at stride k / 32 blocks
+ */
+void ref_q8_0_q8_0_matvec(uint32_t m, uint32_t k, const void *w, const void *x,
+                          float *y);
+void ref_q8_0_q8_0_matmul(uint32_t m, uint32_t n, uint32_t k,
+                          const void *w, const void *x, float *c);
+
 #ifdef __cplusplus
 }
 #endif

@@ -21,6 +21,9 @@ enum op {
     TOY_OP_Q8_0_MATVEC = 8,
     TOY_OP_Q8_0_MATMUL = 9,
     TOY_OP_MUL = 10,
+    // q8_0 weights with q8_0 activations: a is q8_0 (m x k), b is q8_0, c is f32
+    TOY_OP_Q8_0_Q8_0_MATVEC = 11,
+    TOY_OP_Q8_0_Q8_0_MATMUL = 12,
 };
 
 enum isa {
@@ -45,8 +48,11 @@ enum isa {
  * Q8_0_MATVEC: the shape is m x k, n must be 1
  * Q8_0_MATMUL: m, n, k
  *
+ * Q8_0_Q8_0_MATVEC: the shape is m x k, n must be 1
+ * Q8_0_Q8_0_MATMUL: m, n, k
+ *
  * For q8_0, k must be a multiple of 32. A weight row is a series of 34-byte
- * blocks
+ * blocks, and a q8_0 activation is one such series of blocks per column
  */
 struct spec {
     uint32_t op;
