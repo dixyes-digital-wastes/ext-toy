@@ -737,8 +737,19 @@ static bool php_tensor_matvec_impl(tensor *w, tensor *x, uint32_t m, uint32_t k,
         kernel(tensor_data(w), tensor_data(x), tensor_data(result));
         kernel_count_kernel_call();
     } else {
-        ref_matvec(m, k, tensor_data(w), tensor_data(x),
-                       tensor_data(result));
+        /*
+         * The AVX2 kernel sums across k lanes, so it has a different order
+         * from the portable scalar reference. With kernels enabled, a shape
+         * that the generator rejects keeps the AVX2 order, otherwise slicing
+         * the same row into a smaller m would change its bytes
+         */
+        if (kernel_enabled() && kernel_isa() == TOY_ISA_AVX2) {
+            ref_matvec_avx2_order(m, k, tensor_data(w), tensor_data(x),
+                                  tensor_data(result));
+        } else {
+            ref_matvec(m, k, tensor_data(w), tensor_data(x),
+                           tensor_data(result));
+        }
         kernel_count_scalar_call();
     }
 

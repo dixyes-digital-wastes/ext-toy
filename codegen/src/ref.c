@@ -1,10 +1,15 @@
 /*
  * Scalar f32 reference kernels.
  *
- * The accumulation order follows ggml's scalar dot product: every output sums
- * over k in increasing order, with fmaf mirroring the single-rounded FMA that
+ * dot, matvec and the shaped kernels sum over k in increasing order, following
+ * ggml's scalar dot product, with fmaf mirroring the single-rounded FMA that
  * the generated kernels use. Row blocking only hides FMA latency; it does not
  * change the order of any individual sum.
+ *
+ * ref_matvec_avx2_order reproduces the order of the AVX2 matvec kernel, which
+ * keeps every eighth element of a row in one lane and folds the lanes with a
+ * fixed tree. The extension uses it when the generator rejects a shape, so an
+ * AVX2 host returns the same bytes for a row at any m and row offset.
  *
  * Adapted from llama.cpp/ggml (MIT License):
  *   Copyright (c) 2023-2026 The ggml authors
@@ -111,6 +116,42 @@ void ref_matvec(uint32_t m, uint32_t k, const float *w, const float *x, float *y
         for (uint32_t p = 0; p < k; p++) {
             y[i] = fmaf(wp[p], x[p], y[i]);
         }
+    }
+}
+
+/*
+ * Same accumulation order as the AVX2 matvec kernel: lane l of the ymm
+ * accumulator takes w[p + l] * x[p + l] for p in steps of 8, the lane tree
+ * follows the horizontal sum, and the k tail adds in increasing order
+ */
+void ref_matvec_avx2_order(uint32_t m, uint32_t k, const float *w, const float *x,
+                           float *y) {
+    const uint32_t k8 = k & ~7u;
+    for (uint32_t i = 0; i < m; i++) {
+        const float *wp = w + (size_t) i * k;
+        float s0 = 0.0f;
+        float s1 = 0.0f;
+        float s2 = 0.0f;
+        float s3 = 0.0f;
+        float s4 = 0.0f;
+        float s5 = 0.0f;
+        float s6 = 0.0f;
+        float s7 = 0.0f;
+        for (uint32_t p = 0; p < k8; p += 8) {
+            s0 = fmaf(wp[p + 0], x[p + 0], s0);
+            s1 = fmaf(wp[p + 1], x[p + 1], s1);
+            s2 = fmaf(wp[p + 2], x[p + 2], s2);
+            s3 = fmaf(wp[p + 3], x[p + 3], s3);
+            s4 = fmaf(wp[p + 4], x[p + 4], s4);
+            s5 = fmaf(wp[p + 5], x[p + 5], s5);
+            s6 = fmaf(wp[p + 6], x[p + 6], s6);
+            s7 = fmaf(wp[p + 7], x[p + 7], s7);
+        }
+        float sum = ((s0 + s4) + (s2 + s6)) + ((s1 + s5) + (s3 + s7));
+        for (uint32_t p = k8; p < k; p++) {
+            sum = fmaf(wp[p], x[p], sum);
+        }
+        y[i] = sum;
     }
 }
 

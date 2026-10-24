@@ -18,6 +18,13 @@ extern "C" {
 void ref_gemm(uint32_t m, uint32_t n, uint32_t k,
                   const float *a, const float *b, float *c);
 void ref_matvec(uint32_t m, uint32_t k, const float *w, const float *x, float *y);
+/*
+ * AVX2 matvec order: a lane accumulates every eighth element of a row, the
+ * lane tree matches the horizontal sum of the generated kernel, and the k tail
+ * adds in increasing order
+ */
+void ref_matvec_avx2_order(uint32_t m, uint32_t k, const float *w, const float *x,
+                           float *y);
 void ref_dot(uint32_t k, const float *x, const float *y, float *out);
 
 void ref_add_f32(const float *a, const float *b, float *c, size_t count);

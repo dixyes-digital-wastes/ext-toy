@@ -53,11 +53,9 @@ enum {
     LABEL_I = 0,
     LABEL_J = 1,
     LABEL_P = 2,
-    // The matvec main loop has a row label and a k label only, the tail starts at 2
+    // The matvec main loop has a row label and a k label, the row tail has one k loop
     MATVEC_P = 1,
-    MATVEC_TAIL_I = 2,
-    MATVEC_TAIL_J = 3,
-    MATVEC_TAIL_P = 4,
+    MATVEC_TAIL_P = 2,
     // dot has one k loop
     DOT_P = 0,
 };
@@ -282,9 +280,60 @@ static void emit_avx2_gemm(struct assembler *as, uint32_t m, uint32_t n, uint32_
 }
 
 /*
+ * AVX2 matvec row tail: at most 7 rows, one ymm accumulator per row
+ *
+ * The lane mapping, the horizontal sum and the k tail are the same as in the
+ * 8-row group, so a row accumulates in one order for every m and every row
+ * offset
+ */
+static void emit_avx2_matvec_tail(struct assembler *as, uint32_t rows, uint32_t k,
+                                  uint32_t startRow) {
+    if (rows == 0) {
+        return;
+    }
+    const uint32_t k8 = k & ~7u;
+    const uint32_t kt = k & 7u;
+    const int32_t rowBytes = (int32_t)(k * 4);
+
+    // r8 = a + startRow * k, r9 = c + startRow
+    asm_mov_imm32(as, TOY_RAX, startRow);
+    asm_imul_imm(as, TOY_RAX, TOY_RAX, rowBytes);
+    asm_lea(as, TOY_R8, mem_index(TOY_RDI, TOY_RAX, 1, 0));
+    asm_lea(as, TOY_R9, mem_base(TOY_RDX, (int32_t)(startRow * 4)));
+
+    for (uint8_t r = 0; r < rows; r++) {
+        asm_vxorps(as, true, r, r, r);
+    }
+    asm_xor_rr(as, TOY_RAX, TOY_RAX);
+    if (k8 != 0) {
+        asm_label(as, MATVEC_TAIL_P);
+        asm_vmovups_load_ymm(as, TOY_YMM8, mem_index(TOY_RSI, TOY_RAX, 4, 0));
+        for (uint8_t r = 0; r < rows; r++) {
+            asm_vfmadd231ps_mem(as, r, TOY_YMM8,
+                                    mem_index(TOY_R8, TOY_RAX, 4, (int32_t)(r * rowBytes)));
+        }
+        asm_add_imm(as, TOY_RAX, 8);
+        asm_cmp_imm(as, TOY_RAX, (int32_t)k8);
+        asm_jcc(as, TOY_CC_NE, MATVEC_TAIL_P);
+    }
+    for (uint8_t r = 0; r < rows; r++) {
+        emit_reduce_ymm_to_xmm(as, r);
+        for (uint32_t q = 0; q < kt; q++) {
+            asm_vmovss_load(as, TOY_XMM9, mem_base(TOY_RSI, (int32_t)((k8 + q) * 4)));
+            asm_vfmadd231ss_mem(as, r, TOY_XMM9,
+                                    mem_base(TOY_R8, (int32_t)(r * rowBytes + (k8 + q) * 4)));
+        }
+        asm_vmovss_store(as, mem_base(TOY_R9, (int32_t)(r * 4)), r);
+    }
+}
+
+/*
  * AVX2 matvec: 8 rows per group, one ymm accumulator per row, 8 steps along k
  * A lane holds a subsequence of k with step 8, a horizontal sum at the end
  * handles the k tail
+ *
+ * The row tail uses the same scheme instead of the scalar region, so the
+ * result of a row does not depend on m or on its offset inside the matrix
  */
 static void emit_avx2_matvec(struct assembler *as, uint32_t m, uint32_t k) {
     const uint32_t m8 = m & ~7u;
@@ -330,7 +379,7 @@ static void emit_avx2_matvec(struct assembler *as, uint32_t m, uint32_t k) {
         }
     }
 
-    emit_scalar_region(as, m - m8, 1, k, m8, 0, 1, 1, MATVEC_TAIL_I, MATVEC_TAIL_J, MATVEC_TAIL_P);
+    emit_avx2_matvec_tail(as, m - m8, k, m8);
 }
 
 // AVX2 dot: one ymm accumulator, 8 steps along k, horizontal sum at the end
