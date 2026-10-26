@@ -92,6 +92,13 @@ bool spec_supported(const struct spec *spec) {
         return false;
     }
 
+    if (spec->op == TOY_OP_Q8_0_QUANTIZE) {
+        /*
+         * The AVX2 kernel packs the scale with vcvtps2ph, so it needs F16C. A
+         * scalar host uses the reference quantizer
+         */
+        return spec->isa == TOY_ISA_AVX2 && isa_f16c;
+    }
     if (spec->op == TOY_OP_Q8_0_Q8_0_MATVEC || spec->op == TOY_OP_Q8_0_Q8_0_MATMUL) {
         /*
          * The bit-exact lane order needs the byte and word integer products,
@@ -101,6 +108,13 @@ bool spec_supported(const struct spec *spec) {
     }
     if (spec->op >= TOY_OP_Q8_0_DOT && spec->op <= TOY_OP_Q8_0_MATMUL) {
         return isa_f16c;
+    }
+    if (spec->op >= TOY_OP_SIGMOID) {
+        /*
+         * The transcendental kernels are AVX2 only, the scalar reference
+         * covers a host without AVX2
+         */
+        return spec->isa == TOY_ISA_AVX2;
     }
     return true;
 }

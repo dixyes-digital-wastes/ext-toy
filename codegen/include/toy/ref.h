@@ -31,7 +31,38 @@ void ref_add_f32(const float *a, const float *b, float *c, size_t count);
 void ref_mul_f32(const float *a, const float *b, float *c, size_t count);
 void ref_scale_f32(const float *a, float factor, float *c, size_t count);
 void ref_silu_f32(const float *a, float *c, size_t count);
+void ref_sigmoid_f32(const float *a, float *c, size_t count);
+void ref_softplus_f32(const float *a, float *c, size_t count);
 void ref_rmsnorm_f32(const float *x, const float *w, float *out, uint32_t n, float eps);
+
+/*
+ * rms norm of every row against one shared weight row
+ *
+ * out[r][i] = (x[r][i] * scale) * w[i], scale = 1 / sqrt(sum(x[r][i]^2) / width + eps).
+ * The sum of squares is one fma chain in element order, so the generated
+ * kernel can match it exactly
+ */
+void ref_rmsnorm_rows_f32(uint32_t rows, uint32_t width, const float *x, const float *w,
+                          float *out, float eps);
+
+/*
+ * l2 norm of every row, with eps inside the square root
+ *
+ * out[r][i] = x[r][i] / sqrt(sum(x[r][i]^2) + eps), and the sum of squares is
+ * one fma chain in element order, so the generated kernel can match it exactly
+ */
+void ref_l2norm_rows_f32(uint32_t rows, uint32_t width, const float *x, float *out,
+                         float eps);
+
+/*
+ * Causal depthwise conv over channels, with SiLU on the result
+ *
+ * w holds one kernel of taps per channel, x holds the taps of every channel
+ * with x[j * stride + c] for tap j, and out[c] takes the activation of the
+ * channel sum. Each sum is one fma chain in increasing tap order
+ */
+void ref_conv1d_silu_f32(uint32_t count, uint32_t stride, uint32_t taps,
+                         const float *w, const float *x, float *out);
 
 /*
  * q8_0 reference: each block first sums q_i * x_i in f32, then the f16 scale

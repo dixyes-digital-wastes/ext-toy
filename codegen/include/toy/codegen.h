@@ -24,6 +24,17 @@ enum op {
     // q8_0 weights with q8_0 activations: a is q8_0 (m x k), b is q8_0, c is f32
     TOY_OP_Q8_0_Q8_0_MATVEC = 11,
     TOY_OP_Q8_0_Q8_0_MATMUL = 12,
+    // f32 to q8_0 activation quantization: a is f32, c is q8_0
+    TOY_OP_Q8_0_QUANTIZE = 13,
+    // Unary f32 math, AVX2 only: c[i] = f(a[i]) for m elements
+    TOY_OP_SIGMOID = 14,
+    TOY_OP_SOFTPLUS = 15,
+    // Depthwise conv with SiLU: a is w (m x taps), b is x (taps x k), c is m
+    TOY_OP_CONV1D_SILU = 16,
+    // Row l2 norm: a is x (m x k), b is unused, c is m x k
+    TOY_OP_L2NORM = 17,
+    // Row rms norm against one weight row: a is x (m x k), b is w (k), c is m x k
+    TOY_OP_RMSNORM_ROWS = 18,
 };
 
 enum isa {
@@ -51,8 +62,22 @@ enum isa {
  * Q8_0_Q8_0_MATVEC: the shape is m x k, n must be 1
  * Q8_0_Q8_0_MATMUL: m, n, k
  *
+ * Q8_0_QUANTIZE: m is the number of 32 value blocks, n and k must be 1. The
+ * source is m blocks of 32 f32 values and the destination is m 34-byte blocks,
+ * so a row range is just a source pointer offset
+ *
  * For q8_0, k must be a multiple of 32. A weight row is a series of 34-byte
  * blocks, and a q8_0 activation is one such series of blocks per column
+ *
+ * SIGMOID, SOFTPLUS: m is the element count, n and k must be 1
+ * CONV1D_SILU: m is the channel count, k is the stride between two taps of x,
+ *              n must be 1, param_bits holds the tap count
+ * L2NORM: m is the row count, k is the row width, n must be 1, param_bits
+ *         holds the f32 eps bits
+ * RMSNORM_ROWS: the same shape as L2NORM, b points at the shared weight row
+ *
+ * The four transcendental ops have no scalar ISA kernel; a scalar host uses
+ * the reference directly
  */
 struct spec {
     uint32_t op;

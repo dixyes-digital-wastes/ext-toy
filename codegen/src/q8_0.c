@@ -1,5 +1,6 @@
 #include "toy/q8_0.h"
 
+#include <float.h>
 #include <math.h>
 #include <string.h>
 
@@ -79,32 +80,58 @@ size_t q8_0_row_bytes(uint32_t k) {
     return (size_t)(k / TOY_Q8_0_BLOCK) * TOY_Q8_0_BLOCK_BYTES;
 }
 
+/*
+ * One block. The scale is the largest magnitude over 127, the reciprocal
+ * multiplies every value, and the rounded product clamps to the int8 range
+ *
+ * A non-finite product becomes zero, which covers an infinite scale and an
+ * infinite input. The magnitude test also keeps the float to int conversion
+ * inside its range
+ */
+static void q8_0_quantize_block(const float *x, struct q8_0_block *out) {
+    float amax = 0.0f;
+    for (int i = 0; i < TOY_Q8_0_BLOCK; i++) {
+        const float v = fabsf(x[i]);
+        if (v > amax) {
+            amax = v;
+        }
+    }
+    const float d = amax / 127.0f;
+    const float id = d != 0.0f ? 1.0f / d : 0.0f;
+    out->d = f32_to_f16(d);
+    for (int i = 0; i < TOY_Q8_0_BLOCK; i++) {
+        const float t = x[i] * id;
+        int q = 0;
+        if (fabsf(t) <= FLT_MAX) {
+            const float rounded = roundf(t);
+            if (rounded > 127.0f) {
+                q = 127;
+            } else if (rounded < -127.0f) {
+                q = -127;
+            } else {
+                q = (int) rounded;
+            }
+        }
+        out->qs[i] = (int8_t)q;
+    }
+}
+
+void q8_0_quantize_blocks(uint32_t blocks, const float *src, void *dst) {
+    const float *x = src;
+    struct q8_0_block *out = dst;
+    for (uint32_t b = 0; b < blocks; b++) {
+        q8_0_quantize_block(x, out);
+        x += TOY_Q8_0_BLOCK;
+        out++;
+    }
+}
+
 void q8_0_quantize_rows(uint32_t rows, uint32_t k, const float *src, void *dst) {
     const uint32_t blocks = k / TOY_Q8_0_BLOCK;
     struct q8_0_block *out = dst;
     for (uint32_t r = 0; r < rows; r++) {
         for (uint32_t b = 0; b < blocks; b++) {
-            const float *x = src + ((size_t)r * blocks + b) * TOY_Q8_0_BLOCK;
-            float amax = 0.0f;
-            for (int i = 0; i < TOY_Q8_0_BLOCK; i++) {
-                const float v = fabsf(x[i]);
-                if (v > amax) {
-                    amax = v;
-                }
-            }
-            const float d = amax / 127.0f;
-            const float id = d != 0.0f ? 1.0f / d : 0.0f;
-            out->d = f32_to_f16(d);
-            for (int i = 0; i < TOY_Q8_0_BLOCK; i++) {
-                int q = (int)roundf(x[i] * id);
-                if (q > 127) {
-                    q = 127;
-                }
-                if (q < -127) {
-                    q = -127;
-                }
-                out->qs[i] = (int8_t)q;
-            }
+            q8_0_quantize_block(src + ((size_t)r * blocks + b) * TOY_Q8_0_BLOCK, out);
             out++;
         }
     }

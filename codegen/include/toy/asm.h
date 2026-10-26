@@ -141,6 +141,8 @@ void asm_mov_imm64(struct assembler *as, uint8_t dst, uint64_t imm);
 void asm_mov_rr(struct assembler *as, uint8_t dst, uint8_t src);
 void asm_mov_load(struct assembler *as, uint8_t dst, struct mem mem);
 void asm_mov_store(struct assembler *as, struct mem mem, uint8_t src);
+// A 16-bit store, the low half of src
+void asm_mov_store16(struct assembler *as, struct mem mem, uint8_t src);
 void asm_push_r64(struct assembler *as, uint8_t reg);
 void asm_pop_r64(struct assembler *as, uint8_t reg);
 
@@ -172,10 +174,25 @@ void asm_vfmadd231ps(struct assembler *as, uint8_t dst, uint8_t src2, uint8_t sr
 void asm_vfmadd231ps_mem(struct assembler *as, uint8_t dst, uint8_t src2, struct mem mem);
 void asm_vfmadd231ss(struct assembler *as, uint8_t dst, uint8_t src2, uint8_t src3);
 void asm_vfmadd231ss_mem(struct assembler *as, uint8_t dst, uint8_t src2, struct mem mem);
+// dst = src2 * dst + src3, for a Horner step where the addend is a constant
+void asm_vfmadd213ps(struct assembler *as, bool wide, uint8_t dst, uint8_t src2, uint8_t src3);
 
 void asm_vaddps(struct assembler *as, bool wide, uint8_t dst, uint8_t src2, uint8_t src3);
+void asm_vsubps(struct assembler *as, bool wide, uint8_t dst, uint8_t src2, uint8_t src3);
 void asm_vmulps(struct assembler *as, bool wide, uint8_t dst, uint8_t src2, uint8_t src3);
 void asm_vxorps(struct assembler *as, bool wide, uint8_t dst, uint8_t src2, uint8_t src3);
+void asm_vmaxps(struct assembler *as, bool wide, uint8_t dst, uint8_t src2, uint8_t src3);
+void asm_vminps(struct assembler *as, bool wide, uint8_t dst, uint8_t src2, uint8_t src3);
+
+void asm_vpand(struct assembler *as, bool wide, uint8_t dst, uint8_t src1, uint8_t src2);
+void asm_vpor(struct assembler *as, bool wide, uint8_t dst, uint8_t src1, uint8_t src2);
+void asm_vpaddd(struct assembler *as, bool wide, uint8_t dst, uint8_t src1, uint8_t src2);
+void asm_vpsubd(struct assembler *as, bool wide, uint8_t dst, uint8_t src1, uint8_t src2);
+// Shift the 32-bit lanes left or right by an immediate count
+void asm_vpslld(struct assembler *as, bool wide, uint8_t dst, uint8_t src, uint8_t imm);
+void asm_vpsrld(struct assembler *as, bool wide, uint8_t dst, uint8_t src, uint8_t imm);
+// Truncates toward zero, so an out-of-range input yields the integer indefinite
+void asm_vcvttps2dq(struct assembler *as, bool wide, uint8_t dst, uint8_t src);
 
 void asm_vpmovsxbd(struct assembler *as, bool wide, uint8_t dst, struct mem mem);
 void asm_vcvtdq2ps(struct assembler *as, bool wide, uint8_t dst, uint8_t src);
@@ -198,6 +215,17 @@ void asm_vdivps(struct assembler *as, bool wide, uint8_t dst, uint8_t src2, uint
 void asm_vsqrtps(struct assembler *as, bool wide, uint8_t dst, uint8_t src);
 // Moves a 32-bit integer into the low xmm lane, for a constant known at generation time
 void asm_vmovd_gpr(struct assembler *as, uint8_t dst, uint8_t gpr);
+// Moves the low xmm lane into a 32-bit integer register
+void asm_vmovd_xmm_gpr(struct assembler *as, uint8_t gpr, uint8_t src);
 void asm_vinsertf128(struct assembler *as, uint8_t dst, uint8_t src1, uint8_t src2, uint8_t imm);
+
+void asm_vandps(struct assembler *as, bool wide, uint8_t dst, uint8_t src2, uint8_t src3);
+// dst = compare(src2, src3) per lane, the imm selects the predicate
+void asm_vcmpps(struct assembler *as, bool wide, uint8_t dst, uint8_t src2, uint8_t src3, uint8_t imm);
+// Signed saturation of the int32 lanes, 128-bit sources
+void asm_vpackssdw(struct assembler *as, uint8_t dst, uint8_t src2, uint8_t src3);
+void asm_vpacksswb(struct assembler *as, uint8_t dst, uint8_t src2, uint8_t src3);
+// F16C round to nearest even; dst may be the same register as src
+void asm_vcvtps2ph(struct assembler *as, uint8_t dst, uint8_t src, uint8_t imm);
 
 #endif

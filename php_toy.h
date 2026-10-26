@@ -59,12 +59,20 @@ PHP_FUNCTION(tensor_matmul_q8_0_f32);
 PHP_FUNCTION(tensor_matvec_q8_0_f32);
 PHP_FUNCTION(tensor_matmul_q8_0_q8_0);
 PHP_FUNCTION(tensor_matvec_q8_0_q8_0);
+PHP_FUNCTION(tensor_quantize_q8_0);
 PHP_FUNCTION(tensor_add);
 PHP_FUNCTION(tensor_mul);
 PHP_FUNCTION(tensor_scale);
 PHP_FUNCTION(tensor_silu);
+PHP_FUNCTION(tensor_sigmoid);
+PHP_FUNCTION(tensor_softplus);
+PHP_FUNCTION(tensor_l2norm_rows);
+PHP_FUNCTION(tensor_rmsnorm_rows);
+PHP_FUNCTION(tensor_shift_rows);
+PHP_FUNCTION(tensor_conv1d_silu);
 PHP_FUNCTION(tensor_rmsnorm);
 PHP_FUNCTION(tensor_rmsnorm_into);
+PHP_FUNCTION(tensor_gdn_recurrence);
 
 /* Introspection for tests and measurements */
 PHP_FUNCTION(tensor_kernel_stats);

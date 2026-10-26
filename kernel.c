@@ -81,6 +81,18 @@ static uint8_t kernel_op(uint8_t kind)
             return TOY_OP_Q8_0_Q8_0_MATMUL;
         case TOY_KERNEL_MATVEC_Q8_0_Q8_0:
             return TOY_OP_Q8_0_Q8_0_MATVEC;
+        case TOY_KERNEL_Q8_0_QUANTIZE:
+            return TOY_OP_Q8_0_QUANTIZE;
+        case TOY_KERNEL_SIGMOID:
+            return TOY_OP_SIGMOID;
+        case TOY_KERNEL_SOFTPLUS:
+            return TOY_OP_SOFTPLUS;
+        case TOY_KERNEL_CONV1D_SILU:
+            return TOY_OP_CONV1D_SILU;
+        case TOY_KERNEL_L2NORM:
+            return TOY_OP_L2NORM;
+        case TOY_KERNEL_RMSNORM_ROWS:
+            return TOY_OP_RMSNORM_ROWS;
         default:
             return 0;
     }
@@ -287,4 +299,10 @@ kernel_entry kernel_for_shape(uint8_t kind, uint8_t dtype, uint32_t m, uint32_t 
                                       uint32_t k)
 {
     return kernel_resolve(kind, dtype, m, n, k, 0);
+}
+
+kernel_entry kernel_for_shape_param(uint8_t kind, uint8_t dtype, uint32_t m, uint32_t n,
+                                    uint32_t k, uint32_t param_bits)
+{
+    return kernel_resolve(kind, dtype, m, n, k, param_bits);
 }

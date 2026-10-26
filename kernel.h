@@ -30,6 +30,12 @@ typedef enum kernel_kind {
     TOY_KERNEL_MUL = 8,
     TOY_KERNEL_MATMUL_Q8_0_Q8_0 = 9,
     TOY_KERNEL_MATVEC_Q8_0_Q8_0 = 10,
+    TOY_KERNEL_Q8_0_QUANTIZE = 11,
+    TOY_KERNEL_SIGMOID = 12,
+    TOY_KERNEL_SOFTPLUS = 13,
+    TOY_KERNEL_CONV1D_SILU = 14,
+    TOY_KERNEL_L2NORM = 15,
+    TOY_KERNEL_RMSNORM_ROWS = 16,
 } kernel_kind;
 
 typedef struct kernel_stats {
@@ -85,5 +91,12 @@ kernel_entry kernel_for_element(tensor *tensor_value, uint8_t kind, uint32_t par
 /* Resolves a shape-keyed kernel. It does not touch any tensor memo. */
 kernel_entry kernel_for_shape(uint8_t kind, uint8_t dtype, uint32_t m, uint32_t n,
                               uint32_t k);
+
+/*
+ * Resolves a shape-keyed kernel with a parameter, for the kernels whose shape
+ * alone does not identify them: the eps of l2norm, the tap count of conv1d
+ */
+kernel_entry kernel_for_shape_param(uint8_t kind, uint8_t dtype, uint32_t m, uint32_t n,
+                                    uint32_t k, uint32_t param_bits);
 
 #endif /* KERNEL_H */

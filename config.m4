@@ -41,6 +41,7 @@ if test "$PHP_TOY" != "no"; then
   PHP_NEW_EXTENSION([toy], m4_normalize([
     module.c
     ops.c
+    gdn.c
     codegen/src/asm.c
     codegen/src/emit.c
     codegen/src/isa.c

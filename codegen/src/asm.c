@@ -224,6 +224,13 @@ void asm_mov_store(struct assembler *as, struct mem mem, uint8_t src) {
     emit_gpr_mem(as, true, src, mem, 0x89);
 }
 
+void asm_mov_store16(struct assembler *as, struct mem mem, uint8_t src) {
+    emit_u8(as, 0x66);
+    emit_rex(as, false, src, mem.has_index ? mem.index : 0, mem.base);
+    emit_u8(as, 0x89);
+    emit_modrm_mem(as, src, &mem);
+}
+
 void asm_lea(struct assembler *as, uint8_t dst, struct mem mem) {
     emit_gpr_mem(as, true, dst, mem, 0x8D);
 }
@@ -318,6 +325,10 @@ void asm_vfmadd231ps(struct assembler *as, uint8_t dst, uint8_t src2, uint8_t sr
     emit_vex(as, 2, 1, true, false, src2, dst, false, NULL, src3, 0xB8);
 }
 
+void asm_vfmadd213ps(struct assembler *as, bool wide, uint8_t dst, uint8_t src2, uint8_t src3) {
+    emit_vex(as, 2, 1, wide, false, src2, dst, false, NULL, src3, 0xA8);
+}
+
 void asm_vfmadd231ps_mem(struct assembler *as, uint8_t dst, uint8_t src2, struct mem mem) {
     emit_vex(as, 2, 1, true, false, src2, dst, true, &mem, 0, 0xB8);
 }
@@ -334,8 +345,51 @@ void asm_vaddps(struct assembler *as, bool wide, uint8_t dst, uint8_t src2, uint
     emit_vex(as, 1, 0, wide, false, src2, dst, false, NULL, src3, 0x58);
 }
 
+void asm_vsubps(struct assembler *as, bool wide, uint8_t dst, uint8_t src2, uint8_t src3) {
+    emit_vex(as, 1, 0, wide, false, src2, dst, false, NULL, src3, 0x5C);
+}
+
 void asm_vmulps(struct assembler *as, bool wide, uint8_t dst, uint8_t src2, uint8_t src3) {
     emit_vex(as, 1, 0, wide, false, src2, dst, false, NULL, src3, 0x59);
+}
+
+void asm_vmaxps(struct assembler *as, bool wide, uint8_t dst, uint8_t src2, uint8_t src3) {
+    emit_vex(as, 1, 0, wide, false, src2, dst, false, NULL, src3, 0x5F);
+}
+
+void asm_vminps(struct assembler *as, bool wide, uint8_t dst, uint8_t src2, uint8_t src3) {
+    emit_vex(as, 1, 0, wide, false, src2, dst, false, NULL, src3, 0x5D);
+}
+
+void asm_vpand(struct assembler *as, bool wide, uint8_t dst, uint8_t src1, uint8_t src2) {
+    emit_vex(as, 1, 1, wide, false, src1, dst, false, NULL, src2, 0xDB);
+}
+
+void asm_vpor(struct assembler *as, bool wide, uint8_t dst, uint8_t src1, uint8_t src2) {
+    emit_vex(as, 1, 1, wide, false, src1, dst, false, NULL, src2, 0xEB);
+}
+
+void asm_vpaddd(struct assembler *as, bool wide, uint8_t dst, uint8_t src1, uint8_t src2) {
+    emit_vex(as, 1, 1, wide, false, src1, dst, false, NULL, src2, 0xFE);
+}
+
+void asm_vpsubd(struct assembler *as, bool wide, uint8_t dst, uint8_t src1, uint8_t src2) {
+    emit_vex(as, 1, 1, wide, false, src1, dst, false, NULL, src2, 0xFA);
+}
+
+// The shift count is an immediate, so VEX.vvvv carries the destination
+void asm_vpslld(struct assembler *as, bool wide, uint8_t dst, uint8_t src, uint8_t imm) {
+    emit_vex(as, 1, 1, wide, false, dst, 6, false, NULL, src, 0x72);
+    emit_u8(as, imm);
+}
+
+void asm_vpsrld(struct assembler *as, bool wide, uint8_t dst, uint8_t src, uint8_t imm) {
+    emit_vex(as, 1, 1, wide, false, dst, 2, false, NULL, src, 0x72);
+    emit_u8(as, imm);
+}
+
+void asm_vcvttps2dq(struct assembler *as, bool wide, uint8_t dst, uint8_t src) {
+    emit_vex(as, 1, 2, wide, false, 0, dst, false, NULL, src, 0x5B);
 }
 
 void asm_vxorps(struct assembler *as, bool wide, uint8_t dst, uint8_t src2, uint8_t src3) {
@@ -405,5 +459,34 @@ void asm_vmovd_gpr(struct assembler *as, uint8_t dst, uint8_t gpr) {
 
 void asm_vinsertf128(struct assembler *as, uint8_t dst, uint8_t src1, uint8_t src2, uint8_t imm) {
     emit_vex(as, 3, 1, true, false, src1, dst, false, NULL, src2, 0x38);
+    emit_u8(as, imm);
+}
+
+void asm_vmovd_xmm_gpr(struct assembler *as, uint8_t gpr, uint8_t src) {
+    emit_vex(as, 1, 1, false, false, 0, src, false, NULL, gpr, 0x7E);
+}
+
+void asm_vandps(struct assembler *as, bool wide, uint8_t dst, uint8_t src2, uint8_t src3) {
+    emit_vex(as, 1, 0, wide, false, src2, dst, false, NULL, src3, 0x54);
+}
+
+void asm_vcmpps(struct assembler *as, bool wide, uint8_t dst, uint8_t src2, uint8_t src3,
+                uint8_t imm) {
+    emit_vex(as, 1, 0, wide, false, src2, dst, false, NULL, src3, 0xC2);
+    emit_u8(as, imm);
+}
+
+void asm_vpackssdw(struct assembler *as, uint8_t dst, uint8_t src2, uint8_t src3) {
+    emit_vex(as, 1, 1, false, false, src2, dst, false, NULL, src3, 0x6B);
+}
+
+void asm_vpacksswb(struct assembler *as, uint8_t dst, uint8_t src2, uint8_t src3) {
+    emit_vex(as, 1, 1, false, false, src2, dst, false, NULL, src3, 0x63);
+}
+
+// The destination is the rm operand for the register form, the same as the
+// memory form, so reg holds the source
+void asm_vcvtps2ph(struct assembler *as, uint8_t dst, uint8_t src, uint8_t imm) {
+    emit_vex(as, 3, 1, false, false, 0, src, false, NULL, dst, 0x1D);
     emit_u8(as, imm);
 }

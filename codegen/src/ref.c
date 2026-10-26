@@ -59,6 +59,49 @@ void ref_silu_f32(const float *a, float *c, size_t count) {
     }
 }
 
+/* Sigmoid: c = 1 / (1 + exp(-a)) */
+void ref_sigmoid_f32(const float *a, float *c, size_t count) {
+    for (size_t i = 0; i < count; i++) {
+        c[i] = 1.0f / (1.0f + expf(-a[i]));
+    }
+}
+
+/* Softplus: c = log1p(exp(a)) for a <= 20, otherwise c = a */
+void ref_softplus_f32(const float *a, float *c, size_t count) {
+    for (size_t i = 0; i < count; i++) {
+        const float value = a[i];
+        c[i] = value > 20.0f ? value : log1pf(expf(value));
+    }
+}
+
+void ref_l2norm_rows_f32(uint32_t rows, uint32_t width, const float *x, float *out,
+                         float eps) {
+    for (uint32_t r = 0; r < rows; r++) {
+        float squares = 0.0f;
+        for (uint32_t i = 0; i < width; i++) {
+            squares = fmaf(x[i], x[i], squares);
+        }
+
+        const float scale = 1.0f / sqrtf(squares + eps);
+        for (uint32_t i = 0; i < width; i++) {
+            out[i] = x[i] * scale;
+        }
+        x += width;
+        out += width;
+    }
+}
+
+void ref_conv1d_silu_f32(uint32_t count, uint32_t stride, uint32_t taps,
+                         const float *w, const float *x, float *out) {
+    for (uint32_t c = 0; c < count; c++) {
+        float sum = 0.0f;
+        for (uint32_t j = 0; j < taps; j++) {
+            sum = fmaf(w[(size_t)c * taps + j], x[(size_t)j * stride + c], sum);
+        }
+        out[c] = sum * (1.0f / (1.0f + expf(-sum)));
+    }
+}
+
 void ref_rmsnorm_f32(const float *x, const float *w, float *out, uint32_t n, float eps) {
     float squares = 0.0f;
     for (uint32_t i = 0; i < n; i++) {
@@ -68,6 +111,23 @@ void ref_rmsnorm_f32(const float *x, const float *w, float *out, uint32_t n, flo
     const float scale = 1.0f / sqrtf(squares / (float) n + eps);
     for (uint32_t i = 0; i < n; i++) {
         out[i] = x[i] * scale * w[i];
+    }
+}
+
+void ref_rmsnorm_rows_f32(uint32_t rows, uint32_t width, const float *x, const float *w,
+                          float *out, float eps) {
+    for (uint32_t r = 0; r < rows; r++) {
+        float squares = 0.0f;
+        for (uint32_t i = 0; i < width; i++) {
+            squares = fmaf(x[i], x[i], squares);
+        }
+
+        const float scale = 1.0f / sqrtf(squares / (float) width + eps);
+        for (uint32_t i = 0; i < width; i++) {
+            out[i] = x[i] * scale * w[i];
+        }
+        x += width;
+        out += width;
     }
 }
 

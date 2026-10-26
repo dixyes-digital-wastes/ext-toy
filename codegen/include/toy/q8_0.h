@@ -30,7 +30,17 @@ uint16_t f32_to_f16(float f);
 
 size_t q8_0_row_bytes(uint32_t k);
 
-// k must be a multiple of 32. The quantization rule matches ggml: d = amax / 127, q = roundf(x / d)
+/*
+ * The quantization rule matches ggml: d = amax / 127 and q = roundf(x / d),
+ * so the bytes equal llama.cpp for the same f32 input
+ *
+ * NaN values do not enter the scale and quantize to zero. A block whose
+ * largest magnitude is infinite keeps an infinite f16 scale and quantizes to
+ * zero, so the inexact input cases stay defined
+ */
+void q8_0_quantize_blocks(uint32_t blocks, const float *src, void *dst);
+
+// k must be a multiple of 32
 void q8_0_quantize_rows(uint32_t rows, uint32_t k, const float *src, void *dst);
 void q8_0_dequantize_rows(uint32_t rows, uint32_t k, const void *src, float *dst);
 

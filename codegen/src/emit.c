@@ -1,5 +1,6 @@
 #include "toy/codegen.h"
 
+#include <float.h>
 #include <limits.h>
 #include <stddef.h>
 #include <string.h>
@@ -575,6 +576,454 @@ static void emit_rmsnorm(struct assembler *as, uint32_t n, bool wide, uint32_t e
     }
 }
 
+/* ---------- element-wise transcendentals ---------- */
+
+/*
+ * x86 has no exp or log instruction, so the kernels below build both from a
+ * polynomial. exp takes the integer part of x * log2(e) out through the float
+ * exponent bits and log takes the exponent of its argument out the same way.
+ * One register holds the constants, which are rebuilt from an immediate
+ * wherever they are used, so every kernel below keeps a fixed register plan
+ */
+enum {
+    MATH_X = 0,
+    MATH_R = 1,
+    MATH_N = 2,
+    MATH_P = 3,
+    MATH_C = 4,
+    MATH_S = 5,
+};
+
+static void emit_const_vec_bits(struct assembler *as, bool wide, uint8_t reg, uint32_t bits) {
+    asm_mov_imm32(as, TOY_R11, bits);
+    asm_vmovd_gpr(as, reg, TOY_R11);
+    if (wide) {
+        asm_vbroadcastss_reg(as, reg, reg);
+    }
+}
+
+static void emit_const_vec(struct assembler *as, bool wide, uint8_t reg, float value) {
+    emit_const_vec_bits(as, wide, reg, float_bits(value));
+}
+
+/*
+ * exp(x) with x in MATH_X, the result in MATH_N, MATH_R, MATH_P and MATH_C as
+ * scratch
+ *
+ * The input itself is clamped, so the exponent keeps the power of two a
+ * normal f32 and the reduced argument stays small: a very negative input
+ * underflows to zero and a very positive one saturates instead of turning
+ * into a float with another sign. r = x - n * ln2 stays within ln2 / 2 and
+ * the degree 7 Taylor series there is below one f32 ulp. MATH_X holds the
+ * clamped input afterwards
+ */
+static void emit_exp_vec(struct assembler *as, bool wide) {
+    emit_const_vec(as, wide, MATH_C, -88.0f);
+    asm_vmaxps(as, wide, MATH_X, MATH_X, MATH_C);
+    emit_const_vec(as, wide, MATH_C, 88.0f);
+    asm_vminps(as, wide, MATH_X, MATH_X, MATH_C);
+
+    emit_const_vec(as, wide, MATH_C, 1.4426950408889634f);
+    asm_vmulps(as, wide, MATH_R, MATH_X, MATH_C);
+
+    // n = round(t) through the float mantissa
+    emit_const_vec(as, wide, MATH_C, 12582912.0f);
+    asm_vaddps(as, wide, MATH_N, MATH_R, MATH_C);
+    asm_vsubps(as, wide, MATH_N, MATH_N, MATH_C);
+
+    // r = x - n * ln2 in two steps, each product is exact
+    emit_const_vec(as, wide, MATH_C, 0.693145751953125f);
+    asm_vmulps(as, wide, MATH_P, MATH_N, MATH_C);
+    asm_vsubps(as, wide, MATH_P, MATH_X, MATH_P);
+    emit_const_vec(as, wide, MATH_C, 1.428606765330187045e-06f);
+    asm_vmulps(as, wide, MATH_R, MATH_N, MATH_C);
+    asm_vsubps(as, wide, MATH_P, MATH_P, MATH_R);
+
+    // 2^n from the exponent bits
+    asm_vcvttps2dq(as, wide, MATH_R, MATH_N);
+    asm_vpslld(as, wide, MATH_R, MATH_R, 23);
+    emit_const_vec_bits(as, wide, MATH_C, 0x3F800000u);
+    asm_vpaddd(as, wide, MATH_R, MATH_R, MATH_C);
+
+    // Horner from c7 down to c0, with the coefficient as the FMA addend
+    asm_vxorps(as, wide, MATH_N, MATH_N, MATH_N);
+    emit_const_vec(as, wide, MATH_C, 1.0f / 5040.0f);
+    asm_vaddps(as, wide, MATH_N, MATH_N, MATH_C);
+    emit_const_vec(as, wide, MATH_C, 1.0f / 720.0f);
+    asm_vfmadd213ps(as, wide, MATH_N, MATH_P, MATH_C);
+    emit_const_vec(as, wide, MATH_C, 1.0f / 120.0f);
+    asm_vfmadd213ps(as, wide, MATH_N, MATH_P, MATH_C);
+    emit_const_vec(as, wide, MATH_C, 1.0f / 24.0f);
+    asm_vfmadd213ps(as, wide, MATH_N, MATH_P, MATH_C);
+    emit_const_vec(as, wide, MATH_C, 1.0f / 6.0f);
+    asm_vfmadd213ps(as, wide, MATH_N, MATH_P, MATH_C);
+    emit_const_vec(as, wide, MATH_C, 0.5f);
+    asm_vfmadd213ps(as, wide, MATH_N, MATH_P, MATH_C);
+    emit_const_vec(as, wide, MATH_C, 1.0f);
+    asm_vfmadd213ps(as, wide, MATH_N, MATH_P, MATH_C);
+    asm_vfmadd213ps(as, wide, MATH_N, MATH_P, MATH_C);
+
+    asm_vmulps(as, wide, MATH_N, MATH_N, MATH_R);
+}
+
+/*
+ * sigmoid(x) = e / (1 + e) with e = exp(x), which keeps every intermediate
+ * finite and needs no second exponential. The result lands in MATH_X
+ */
+static void emit_sigmoid_vec(struct assembler *as, bool wide) {
+    emit_exp_vec(as, wide);
+    emit_const_vec(as, wide, MATH_C, 1.0f);
+    asm_vaddps(as, wide, MATH_P, MATH_N, MATH_C);
+    asm_vdivps(as, wide, MATH_X, MATH_N, MATH_P);
+}
+
+/* silu(x) = x * sigmoid(x), the result lands in MATH_X */
+static void emit_silu_vec(struct assembler *as, bool wide) {
+    // exp clamps its input, so keep x for the final multiply
+    asm_vxorps(as, wide, MATH_S, MATH_S, MATH_S);
+    asm_vaddps(as, wide, MATH_S, MATH_S, MATH_X);
+    emit_exp_vec(as, wide);
+    emit_const_vec(as, wide, MATH_C, 1.0f);
+    asm_vaddps(as, wide, MATH_P, MATH_N, MATH_C);
+    asm_vdivps(as, wide, MATH_N, MATH_N, MATH_P);
+    asm_vmulps(as, wide, MATH_X, MATH_N, MATH_S);
+}
+
+/*
+ * softplus(x) = log1p(exp(min(x, 20))), then the larger of that and x
+ *
+ * Above 20 the exponential would overflow, so the clamp saturates the
+ * logarithm near 20 instead, and the maximum restores softplus(x) == x, which
+ * holds in f32 from 20 on. The logarithm splits u = 1 + e into its exponent
+ * and its mantissa and takes the atanh series of the mantissa. The result
+ * lands in MATH_X
+ */
+static void emit_softplus_vec(struct assembler *as, bool wide) {
+    asm_vxorps(as, wide, MATH_S, MATH_S, MATH_S);
+    asm_vaddps(as, wide, MATH_S, MATH_S, MATH_X);
+    emit_const_vec(as, wide, MATH_C, 20.0f);
+    asm_vminps(as, wide, MATH_X, MATH_X, MATH_C);
+    emit_exp_vec(as, wide);
+
+    // u = 1 + e, then the exponent and the mantissa bits of u. The integer
+    // lane operations read the float bits, so u needs no conversion
+    emit_const_vec(as, wide, MATH_C, 1.0f);
+    asm_vaddps(as, wide, MATH_P, MATH_N, MATH_C);
+    asm_vpsrld(as, wide, MATH_N, MATH_P, 23);
+    emit_const_vec_bits(as, wide, MATH_C, 127u);
+    asm_vpsubd(as, wide, MATH_N, MATH_N, MATH_C);
+    emit_const_vec_bits(as, wide, MATH_C, 0x007FFFFFu);
+    asm_vpand(as, wide, MATH_R, MATH_P, MATH_C);
+    emit_const_vec_bits(as, wide, MATH_C, 0x3F800000u);
+    asm_vpor(as, wide, MATH_R, MATH_R, MATH_C);
+
+    // z = (m - 1) / (m + 1), log(m) = 2 * z * (1 + z^2 * q)
+    asm_vsubps(as, wide, MATH_P, MATH_R, MATH_C);
+    asm_vaddps(as, wide, MATH_R, MATH_R, MATH_C);
+    asm_vdivps(as, wide, MATH_P, MATH_P, MATH_R);
+    asm_vmulps(as, wide, MATH_R, MATH_P, MATH_P);
+
+    asm_vxorps(as, wide, MATH_X, MATH_X, MATH_X);
+    emit_const_vec(as, wide, MATH_C, 1.0f / 11.0f);
+    asm_vaddps(as, wide, MATH_X, MATH_X, MATH_C);
+    emit_const_vec(as, wide, MATH_C, 1.0f / 9.0f);
+    asm_vfmadd213ps(as, wide, MATH_X, MATH_R, MATH_C);
+    emit_const_vec(as, wide, MATH_C, 1.0f / 7.0f);
+    asm_vfmadd213ps(as, wide, MATH_X, MATH_R, MATH_C);
+    emit_const_vec(as, wide, MATH_C, 1.0f / 5.0f);
+    asm_vfmadd213ps(as, wide, MATH_X, MATH_R, MATH_C);
+    emit_const_vec(as, wide, MATH_C, 1.0f / 3.0f);
+    asm_vfmadd213ps(as, wide, MATH_X, MATH_R, MATH_C);
+    emit_const_vec(as, wide, MATH_C, 1.0f);
+    asm_vfmadd213ps(as, wide, MATH_X, MATH_R, MATH_C);
+    asm_vmulps(as, wide, MATH_X, MATH_X, MATH_P);
+    asm_vaddps(as, wide, MATH_X, MATH_X, MATH_X);
+
+    // log(u) = e * ln2 + log(m), then the larger of that and x
+    asm_vcvtdq2ps(as, wide, MATH_N, MATH_N);
+    emit_const_vec(as, wide, MATH_C, 0.693145751953125f);
+    asm_vmulps(as, wide, MATH_R, MATH_N, MATH_C);
+    emit_const_vec(as, wide, MATH_C, 1.428606765330187045e-06f);
+    asm_vmulps(as, wide, MATH_P, MATH_N, MATH_C);
+    asm_vaddps(as, wide, MATH_R, MATH_R, MATH_P);
+    asm_vaddps(as, wide, MATH_X, MATH_X, MATH_R);
+    asm_vmaxps(as, wide, MATH_X, MATH_X, MATH_S);
+}
+
+/*
+ * Unary math over m elements, eight at a time and then one at a time for the
+ * tail. The count is a generation-time constant
+ */
+static void emit_unary_math(struct assembler *as, uint32_t op, uint32_t count, bool wide) {
+    const uint32_t step = wide ? 8u : 1u;
+    const uint32_t main = count - (count % step);
+
+    asm_xor_rr(as, TOY_RAX, TOY_RAX);
+    if (main != 0) {
+        asm_label(as, 0);
+        if (wide) {
+            asm_vmovups_load_ymm(as, MATH_X, mem_index(TOY_RDI, TOY_RAX, 4, 0));
+        } else {
+            asm_vmovss_load(as, MATH_X, mem_index(TOY_RDI, TOY_RAX, 4, 0));
+        }
+        if (op == TOY_OP_SIGMOID) {
+            emit_sigmoid_vec(as, wide);
+        } else {
+            emit_softplus_vec(as, wide);
+        }
+        if (wide) {
+            asm_vmovups_store_ymm(as, mem_index(TOY_RDX, TOY_RAX, 4, 0), MATH_X);
+        } else {
+            asm_vmovss_store(as, mem_index(TOY_RDX, TOY_RAX, 4, 0), MATH_X);
+        }
+        asm_add_imm(as, TOY_RAX, (int32_t) step);
+        asm_cmp_imm(as, TOY_RAX, (int32_t) main);
+        asm_jcc(as, TOY_CC_NE, 0);
+    }
+    if (main < count) {
+        // The tail always handles one element
+        asm_label(as, 1);
+        asm_vmovss_load(as, MATH_X, mem_index(TOY_RDI, TOY_RAX, 4, 0));
+        if (op == TOY_OP_SIGMOID) {
+            emit_sigmoid_vec(as, false);
+        } else {
+            emit_softplus_vec(as, false);
+        }
+        asm_vmovss_store(as, mem_index(TOY_RDX, TOY_RAX, 4, 0), MATH_X);
+        asm_add_imm(as, TOY_RAX, 1);
+        asm_cmp_imm(as, TOY_RAX, (int32_t) count);
+        asm_jcc(as, TOY_CC_NE, 1);
+    }
+}
+
+/*
+ * The row norms below share one kernel body. The sum of squares stays one
+ * scalar fma chain per row, in element order, so the kernel matches the
+ * reference bit for bit. Four rows run at the same time, which hides the FMA
+ * latency without changing the order of any single sum. The scale of a row
+ * comes from its own sum alone, and the output loop is vectorized
+ *
+ * L2NORM divides by sqrt(sum + eps), RMSNORM_ROWS by sqrt(sum / k + eps) and
+ * then multiplies every row by the same weight row. m is the row count and k
+ * the row width
+ */
+enum {
+    ROW_NORM_ROWS = 4,
+    ROW_NORM_GROUP = 0,
+    ROW_NORM_SUM = 1,
+    ROW_NORM_SCALE = 8,
+    ROW_NORM_TAIL_LOOP = 10,
+    ROW_NORM_TAIL_SUM = 11,
+    ROW_NORM_TAIL_MAIN = 12,
+    ROW_NORM_TAIL_TAIL = 13,
+};
+
+/* scale = 1 / sqrt(sum [ / width] + eps), copied into every lane of dst */
+static void emit_row_scale(struct assembler *as, uint8_t sum, uint8_t dst, bool wide,
+                           uint32_t width, uint32_t eps_bits, bool mean) {
+    if (mean) {
+        emit_const_xmm(as, TOY_XMM4, float_bits((float) width));
+        asm_vdivps(as, false, sum, sum, TOY_XMM4);
+    }
+    emit_const_xmm(as, TOY_XMM4, eps_bits);
+    asm_vaddps(as, false, sum, sum, TOY_XMM4);
+    asm_vsqrtps(as, false, sum, sum);
+    emit_const_xmm(as, TOY_XMM4, float_bits(1.0f));
+    asm_vdivps(as, false, sum, TOY_XMM4, sum);
+    asm_vshufps(as, dst, sum, sum, 0x00);
+    if (wide) {
+        asm_vinsertf128(as, dst, dst, dst, 1);
+    }
+}
+
+/*
+ * The output loop of one row: out = x * scale, then times the weight row in
+ * the rmsnorm case. The weight pointer is b, in rsi
+ */
+static void emit_row_norm_out(struct assembler *as, uint8_t scale, bool wide, uint32_t width,
+                              int32_t row_bytes, uint8_t main_label, uint8_t tail_label,
+                              bool weighted) {
+    const uint32_t step = wide ? 8u : 1u;
+    const uint32_t main = width - (width % step);
+
+    asm_xor_rr(as, TOY_RAX, TOY_RAX);
+    if (main != 0) {
+        asm_label(as, main_label);
+        if (wide) {
+            asm_vmovups_load_ymm(as, TOY_YMM0, mem_index(TOY_R8, TOY_RAX, 4, row_bytes));
+            asm_vmulps(as, true, TOY_YMM0, TOY_YMM0, scale);
+            if (weighted) {
+                asm_vmovups_load_ymm(as, TOY_YMM1, mem_index(TOY_RSI, TOY_RAX, 4, 0));
+                asm_vmulps(as, true, TOY_YMM0, TOY_YMM0, TOY_YMM1);
+            }
+            asm_vmovups_store_ymm(as, mem_index(TOY_R9, TOY_RAX, 4, row_bytes), TOY_YMM0);
+        } else {
+            asm_vmovss_load(as, TOY_XMM0, mem_index(TOY_R8, TOY_RAX, 4, row_bytes));
+            asm_vmulps(as, false, TOY_XMM0, TOY_XMM0, scale);
+            if (weighted) {
+                asm_vmovss_load(as, TOY_XMM1, mem_index(TOY_RSI, TOY_RAX, 4, 0));
+                asm_vmulps(as, false, TOY_XMM0, TOY_XMM0, TOY_XMM1);
+            }
+            asm_vmovss_store(as, mem_index(TOY_R9, TOY_RAX, 4, row_bytes), TOY_XMM0);
+        }
+        asm_add_imm(as, TOY_RAX, (int32_t) step);
+        asm_cmp_imm(as, TOY_RAX, (int32_t) main);
+        asm_jcc(as, TOY_CC_NE, main_label);
+    }
+    if (main < width) {
+        asm_label(as, tail_label);
+        asm_vmovss_load(as, TOY_XMM0, mem_index(TOY_R8, TOY_RAX, 4, row_bytes));
+        asm_vmulps(as, false, TOY_XMM0, TOY_XMM0, scale);
+        if (weighted) {
+            asm_vmovss_load(as, TOY_XMM1, mem_index(TOY_RSI, TOY_RAX, 4, 0));
+            asm_vmulps(as, false, TOY_XMM0, TOY_XMM0, TOY_XMM1);
+        }
+        asm_vmovss_store(as, mem_index(TOY_R9, TOY_RAX, 4, row_bytes), TOY_XMM0);
+        asm_add_imm(as, TOY_RAX, 1);
+        asm_cmp_imm(as, TOY_RAX, (int32_t) width);
+        asm_jcc(as, TOY_CC_NE, tail_label);
+    }
+}
+
+static void emit_row_norm(struct assembler *as, uint32_t rows, uint32_t width, bool wide,
+                          uint32_t eps_bits, bool mean, bool weighted) {
+    const uint32_t groups = rows / ROW_NORM_ROWS;
+    const uint32_t tail = rows - groups * ROW_NORM_ROWS;
+    const int32_t row_bytes = (int32_t)(width * 4);
+    const int32_t group_bytes = (int32_t)(ROW_NORM_ROWS * width * 4);
+
+    asm_mov_rr(as, TOY_R8, TOY_RDI);
+    asm_mov_rr(as, TOY_R9, TOY_RDX);
+    asm_xor_rr(as, TOY_R11, TOY_R11);
+
+    if (groups != 0) {
+        asm_label(as, ROW_NORM_GROUP);
+        for (uint8_t r = 0; r < ROW_NORM_ROWS; r++) {
+            asm_vxorps(as, false, r, r, r);
+        }
+        asm_xor_rr(as, TOY_RAX, TOY_RAX);
+        asm_label(as, ROW_NORM_SUM);
+        for (uint8_t r = 0; r < ROW_NORM_ROWS; r++) {
+            asm_vmovss_load(as, TOY_XMM4,
+                            mem_index(TOY_R8, TOY_RAX, 4, (int32_t)(r * row_bytes)));
+            asm_vfmadd231ss_mem(as, r, TOY_XMM4,
+                                mem_index(TOY_R8, TOY_RAX, 4, (int32_t)(r * row_bytes)));
+        }
+        asm_add_imm(as, TOY_RAX, 1);
+        asm_cmp_imm(as, TOY_RAX, (int32_t) width);
+        asm_jcc(as, TOY_CC_NE, ROW_NORM_SUM);
+
+        for (uint8_t r = 0; r < ROW_NORM_ROWS; r++) {
+            emit_row_scale(as, r, ROW_NORM_SCALE + r, wide, width, eps_bits, mean);
+        }
+        for (uint8_t r = 0; r < ROW_NORM_ROWS; r++) {
+            emit_row_norm_out(as, ROW_NORM_SCALE + r, wide, width, (int32_t)(r * row_bytes),
+                              2 + r * 2, 3 + r * 2, weighted);
+        }
+
+        asm_add_imm(as, TOY_R8, group_bytes);
+        asm_add_imm(as, TOY_R9, group_bytes);
+        asm_add_imm(as, TOY_R11, ROW_NORM_ROWS);
+        asm_cmp_imm(as, TOY_R11, (int32_t)(groups * ROW_NORM_ROWS));
+        asm_jcc(as, TOY_CC_NE, ROW_NORM_GROUP);
+    }
+
+    if (tail != 0) {
+        asm_label(as, ROW_NORM_TAIL_LOOP);
+        asm_vxorps(as, false, TOY_XMM0, TOY_XMM0, TOY_XMM0);
+        asm_xor_rr(as, TOY_RAX, TOY_RAX);
+        asm_label(as, ROW_NORM_TAIL_SUM);
+        asm_vmovss_load(as, TOY_XMM4, mem_index(TOY_R8, TOY_RAX, 4, 0));
+        asm_vfmadd231ss_mem(as, TOY_XMM0, TOY_XMM4, mem_index(TOY_R8, TOY_RAX, 4, 0));
+        asm_add_imm(as, TOY_RAX, 1);
+        asm_cmp_imm(as, TOY_RAX, (int32_t) width);
+        asm_jcc(as, TOY_CC_NE, ROW_NORM_TAIL_SUM);
+
+        emit_row_scale(as, TOY_XMM0, TOY_XMM7, wide, width, eps_bits, mean);
+        emit_row_norm_out(as, TOY_YMM7, wide, width, 0, ROW_NORM_TAIL_MAIN,
+                          ROW_NORM_TAIL_TAIL, weighted);
+
+        asm_add_imm(as, TOY_R8, row_bytes);
+        asm_add_imm(as, TOY_R9, row_bytes);
+        asm_add_imm(as, TOY_R11, 1);
+        asm_cmp_imm(as, TOY_R11, (int32_t) rows);
+        asm_jcc(as, TOY_CC_NE, ROW_NORM_TAIL_LOOP);
+    }
+}
+
+/* L2NORM: out[r][i] = x[r][i] / sqrt(sum(x[r][i]^2) + eps) */
+static void emit_l2norm(struct assembler *as, uint32_t rows, uint32_t width, bool wide,
+                        uint32_t eps_bits) {
+    emit_row_norm(as, rows, width, wide, eps_bits, false, false);
+}
+
+/* RMSNORM_ROWS: out[r][i] = (x[r][i] / sqrt(sum(x[r][i]^2) / k + eps)) * w[i] */
+static void emit_rmsnorm_rows(struct assembler *as, uint32_t rows, uint32_t width, bool wide,
+                              uint32_t eps_bits) {
+    emit_row_norm(as, rows, width, wide, eps_bits, true, true);
+}
+
+/*
+ * CONV1D_SILU: out[c] = silu(sum over j of w[c * taps + j] * x[j * stride + c])
+ *
+ * Pass one keeps one scalar fma chain per channel in increasing tap order, so
+ * the sums match the reference bit for bit. Pass two then runs the activation
+ * over the output, which lets one AVX2 loop cover eight channels. m is the
+ * channel count, k the stride between two taps of x and param_bits the tap
+ * count
+ */
+static void emit_conv1d_silu(struct assembler *as, uint32_t count, uint32_t stride,
+                             uint32_t taps, bool wide) {
+    // The dot pass: r10 walks the weight rows, rax the channel
+    asm_xor_rr(as, TOY_R10, TOY_R10);
+    asm_xor_rr(as, TOY_RAX, TOY_RAX);
+    asm_label(as, 0);
+    asm_vxorps(as, false, TOY_XMM0, TOY_XMM0, TOY_XMM0);
+    for (uint32_t j = 0; j < taps; j++) {
+        asm_vmovss_load(as, TOY_XMM1,
+                        mem_index(TOY_RSI, TOY_RAX, 4, (int32_t)(j * stride * 4)));
+        asm_vfmadd231ss_mem(as, TOY_XMM0, TOY_XMM1,
+                            mem_index(TOY_RDI, TOY_R10, 1, (int32_t)(j * 4)));
+    }
+    asm_vmovss_store(as, mem_index(TOY_RDX, TOY_RAX, 4, 0), TOY_XMM0);
+    asm_add_imm(as, TOY_R10, (int32_t)(taps * 4));
+    asm_add_imm(as, TOY_RAX, 1);
+    asm_cmp_imm(as, TOY_RAX, (int32_t) count);
+    asm_jcc(as, TOY_CC_NE, 0);
+
+    // The activation pass
+    const uint32_t step = wide ? 8u : 1u;
+    const uint32_t main = count - (count % step);
+    asm_xor_rr(as, TOY_RAX, TOY_RAX);
+    if (main != 0) {
+        asm_label(as, 1);
+        if (wide) {
+            asm_vmovups_load_ymm(as, MATH_X, mem_index(TOY_RDX, TOY_RAX, 4, 0));
+        } else {
+            asm_vmovss_load(as, MATH_X, mem_index(TOY_RDX, TOY_RAX, 4, 0));
+        }
+        emit_silu_vec(as, wide);
+        if (wide) {
+            asm_vmovups_store_ymm(as, mem_index(TOY_RDX, TOY_RAX, 4, 0), MATH_X);
+        } else {
+            asm_vmovss_store(as, mem_index(TOY_RDX, TOY_RAX, 4, 0), MATH_X);
+        }
+        asm_add_imm(as, TOY_RAX, (int32_t) step);
+        asm_cmp_imm(as, TOY_RAX, (int32_t) main);
+        asm_jcc(as, TOY_CC_NE, 1);
+    }
+    if (main < count) {
+        // The tail always handles one element
+        asm_label(as, 2);
+        asm_vmovss_load(as, MATH_X, mem_index(TOY_RDX, TOY_RAX, 4, 0));
+        emit_silu_vec(as, false);
+        asm_vmovss_store(as, mem_index(TOY_RDX, TOY_RAX, 4, 0), MATH_X);
+        asm_add_imm(as, TOY_RAX, 1);
+        asm_cmp_imm(as, TOY_RAX, (int32_t) count);
+        asm_jcc(as, TOY_CC_NE, 2);
+    }
+}
+
 
 /* ---------- q8_0 ---------- */
 
@@ -958,11 +1407,142 @@ static void emit_q8_q8_avx2(struct assembler *as, uint32_t m, uint32_t n, uint32
     }
 }
 
+/* ---------- f32 to q8_0 activation quantization ---------- */
+
+/*
+ * Register plan of the quantizer: xmm0 to xmm3 hold constants that survive
+ * the loop, xmm4 and xmm5 the scale and the reciprocal, xmm6 to xmm9 the
+ * values, xmm10 to xmm13 the int32 lanes and xmm14 and xmm15 the scratch
+ */
+enum {
+    Q8Q_ABS_MASK = 0,
+    Q8Q_HALF = 1,
+    Q8Q_NEG_HALF = 2,
+    Q8Q_FLT_MAX = 3,
+    Q8Q_SCALE = 4,
+    Q8Q_ID = 5,
+    Q8Q_VALUE = 6,
+    Q8Q_LANES = 10,
+    Q8Q_SCRATCH = 14,
+    Q8Q_SCRATCH_HIGH = 15,
+};
+
+// Writes a generation-time constant into all lanes of xmm, rax is scratch
+static void emit_const_xmm_broadcast(struct assembler *as, uint8_t xmm, uint32_t bits) {
+    emit_const_xmm(as, xmm, bits);
+    asm_vshufps(as, xmm, xmm, xmm, 0x00);
+}
+
+/*
+ * AVX2 f32 to q8_0, one 32 value block per iteration
+ *
+ * The sequence follows q8_0_quantize_block: the largest magnitude over 127
+ * gives the scale, the reciprocal multiplies every value, and the product
+ * rounds half away from zero and saturates to int8. The magnitude comparison
+ * feeds the rounding, because it also keeps an infinite product at zero
+ *
+ * The comparisons use the ordered predicates, so a NaN value never enters the
+ * scale and quantizes to zero
+ */
+static void emit_q8_quantize_avx2(struct assembler *as, uint32_t blocks) {
+    if (blocks == 0) {
+        return;
+    }
+
+    emit_const_xmm_broadcast(as, TOY_XMM0, 0x7FFFFFFFu);
+    asm_vbroadcastss_reg(as, Q8Q_ABS_MASK, TOY_XMM0);
+    emit_const_xmm_broadcast(as, TOY_XMM1, float_bits(0.5f));
+    asm_vbroadcastss_reg(as, Q8Q_HALF, TOY_XMM1);
+    emit_const_xmm_broadcast(as, TOY_XMM2, float_bits(-0.5f));
+    asm_vbroadcastss_reg(as, Q8Q_NEG_HALF, TOY_XMM2);
+    emit_const_xmm_broadcast(as, TOY_XMM3, float_bits(FLT_MAX));
+    asm_vbroadcastss_reg(as, Q8Q_FLT_MAX, TOY_XMM3);
+
+    asm_mov_rr(as, TOY_R8, TOY_RDI);
+    asm_mov_rr(as, TOY_R9, TOY_RDX);
+    asm_xor_rr(as, TOY_R10, TOY_R10);
+    if (blocks > 1) {
+        asm_label(as, 0);
+    }
+
+    for (uint8_t v = 0; v < 4; v++) {
+        asm_vmovups_load_ymm(as, (uint8_t)(Q8Q_VALUE + v),
+                             mem_base(TOY_R8, (int32_t)(v * 32)));
+        asm_vandps(as, true, (uint8_t)(Q8Q_LANES + v), (uint8_t)(Q8Q_VALUE + v), Q8Q_ABS_MASK);
+    }
+
+    // The maximum ignores NaN: maxps returns the second source, and that source is
+    // the running maximum when the value is the first source
+    asm_vxorps(as, true, Q8Q_SCALE, Q8Q_SCALE, Q8Q_SCALE);
+    for (uint8_t v = 0; v < 4; v++) {
+        asm_vmaxps(as, true, Q8Q_SCALE, (uint8_t)(Q8Q_LANES + v), Q8Q_SCALE);
+    }
+    // The high half comes out first: a 128-bit vmaxps zeroes the upper lanes
+    asm_vextractf128(as, Q8Q_ID, Q8Q_SCALE, 1);
+    asm_vmaxps(as, false, Q8Q_SCALE, Q8Q_SCALE, Q8Q_ID);
+    asm_vpermilps(as, Q8Q_ID, Q8Q_SCALE, 0xB1);
+    asm_vmaxps(as, false, Q8Q_SCALE, Q8Q_SCALE, Q8Q_ID);
+    asm_vpermilps(as, Q8Q_ID, Q8Q_SCALE, 0x4E);
+    asm_vmaxps(as, false, Q8Q_SCALE, Q8Q_SCALE, Q8Q_ID);
+
+    // scale = amax / 127, stored as f16 in the first two bytes of the block
+    emit_const_xmm_broadcast(as, Q8Q_ID, float_bits(127.0f));
+    asm_vdivps(as, false, Q8Q_SCALE, Q8Q_SCALE, Q8Q_ID);
+    asm_vcvtps2ph(as, Q8Q_ID, Q8Q_SCALE, 0);
+    asm_vmovd_xmm_gpr(as, TOY_RAX, Q8Q_ID);
+    asm_mov_store16(as, mem_base(TOY_R9, 0), TOY_RAX);
+
+    // id = 1 / scale, zero for a zero scale
+    emit_const_xmm_broadcast(as, Q8Q_ID, float_bits(1.0f));
+    asm_vdivps(as, false, Q8Q_ID, Q8Q_ID, Q8Q_SCALE);
+    asm_vxorps(as, false, Q8Q_SCRATCH_HIGH, Q8Q_SCRATCH_HIGH, Q8Q_SCRATCH_HIGH);
+    asm_vcmpps(as, false, Q8Q_SCALE, Q8Q_SCALE, Q8Q_SCRATCH_HIGH, 4 /* NEQ */);
+    asm_vandps(as, false, Q8Q_ID, Q8Q_ID, Q8Q_SCALE);
+    asm_vbroadcastss_reg(as, Q8Q_ID, Q8Q_ID);
+
+    for (uint8_t v = 0; v < 4; v++) {
+        const uint8_t value = (uint8_t)(Q8Q_VALUE + v);
+        const uint8_t q = (uint8_t)(Q8Q_LANES + v);
+
+        asm_vmulps(as, true, value, value, Q8Q_ID);
+        // q = roundf(value): truncate, then step away from zero at a half
+        asm_vcvttps2dq(as, true, q, value);
+        asm_vcvtdq2ps(as, true, Q8Q_SCRATCH, q);
+        asm_vsubps(as, true, Q8Q_SCRATCH, value, Q8Q_SCRATCH);
+        asm_vcmpps(as, true, Q8Q_SCRATCH_HIGH, Q8Q_SCRATCH, Q8Q_HALF, 13 /* GE */);
+        asm_vpsubd(as, true, q, q, Q8Q_SCRATCH_HIGH);
+        asm_vcmpps(as, true, Q8Q_SCRATCH, Q8Q_SCRATCH, Q8Q_NEG_HALF, 2 /* LE */);
+        asm_vpaddd(as, true, q, q, Q8Q_SCRATCH);
+        // A non-finite product quantizes to zero
+        asm_vandps(as, true, Q8Q_SCRATCH_HIGH, value, Q8Q_ABS_MASK);
+        asm_vcmpps(as, true, Q8Q_SCRATCH_HIGH, Q8Q_SCRATCH_HIGH, Q8Q_FLT_MAX, 2 /* LE */);
+        asm_vpand(as, true, q, q, Q8Q_SCRATCH_HIGH);
+    }
+
+    // pack the four int32 vectors into 32 int8 values in order
+    for (uint8_t v = 0; v < 4; v++) {
+        asm_vextractf128(as, Q8Q_SCRATCH, (uint8_t)(Q8Q_LANES + v), 1);
+        asm_vpackssdw(as, (uint8_t)(Q8Q_LANES + v), (uint8_t)(Q8Q_LANES + v), Q8Q_SCRATCH);
+    }
+    asm_vpacksswb(as, Q8Q_SCRATCH, (uint8_t)(Q8Q_LANES + 0), (uint8_t)(Q8Q_LANES + 1));
+    asm_vpacksswb(as, Q8Q_SCRATCH_HIGH, (uint8_t)(Q8Q_LANES + 2), (uint8_t)(Q8Q_LANES + 3));
+    asm_vmovups_store_xmm(as, mem_base(TOY_R9, 2), Q8Q_SCRATCH);
+    asm_vmovups_store_xmm(as, mem_base(TOY_R9, 18), Q8Q_SCRATCH_HIGH);
+
+    asm_add_imm(as, TOY_R8, 4 * TOY_Q8_0_BLOCK);
+    asm_add_imm(as, TOY_R9, TOY_Q8_0_BLOCK_BYTES);
+    if (blocks > 1) {
+        asm_add_imm(as, TOY_R10, 1);
+        asm_cmp_imm(as, TOY_R10, (int32_t) blocks);
+        asm_jcc(as, TOY_CC_NE, 0);
+    }
+}
+
 static bool spec_valid(const struct spec *spec) {
     if (spec == NULL) {
         return false;
     }
-    if (spec->op < TOY_OP_GEMM || spec->op > TOY_OP_Q8_0_Q8_0_MATMUL) {
+    if (spec->op < TOY_OP_GEMM || spec->op > TOY_OP_RMSNORM_ROWS) {
         return false;
     }
     if (spec->isa != TOY_ISA_SCALAR && spec->isa != TOY_ISA_AVX2) {
@@ -970,6 +1550,13 @@ static bool spec_valid(const struct spec *spec) {
     }
     if (spec->m == 0 || spec->n == 0 || spec->k == 0) {
         return false;
+    }
+    if (spec->op == TOY_OP_Q8_0_QUANTIZE) {
+        // m is the block count, the source and the destination are flat streams
+        if (spec->n != 1 || spec->k != 1) {
+            return false;
+        }
+        return spec->m <= (uint32_t)(INT32_MAX / TOY_Q8_0_BLOCK_BYTES);
     }
     if (op_is_q8_0(spec->op)) {
         if (spec->m > 65535 || spec->n > 65535 || spec->k > 65535) {
@@ -990,6 +1577,30 @@ static bool spec_valid(const struct spec *spec) {
             return false;
         }
         return true;
+    }
+
+    if (spec->op == TOY_OP_SIGMOID || spec->op == TOY_OP_SOFTPLUS) {
+        // The unary kernels are AVX2 only; the reference covers the rest
+        if (spec->isa != TOY_ISA_AVX2 || spec->n != 1 || spec->k != 1) {
+            return false;
+        }
+        return spec->m <= (uint32_t)(INT32_MAX / 4);
+    }
+    if (spec->op == TOY_OP_CONV1D_SILU) {
+        const uint64_t taps = spec->param_bits;
+        if (spec->isa != TOY_ISA_AVX2 || spec->n != 1 || taps == 0 || taps > 64) {
+            return false;
+        }
+        // The tap displacement and the output offset are int32
+        const uint64_t reach = (taps - 1) * spec->k * 4 + (uint64_t)spec->m * 4;
+        return spec->m <= (uint32_t)(INT32_MAX / 4) && reach <= (uint64_t)INT32_MAX;
+    }
+    if (spec->op == TOY_OP_L2NORM || spec->op == TOY_OP_RMSNORM_ROWS) {
+        if (spec->isa != TOY_ISA_AVX2 || spec->n != 1) {
+            return false;
+        }
+        const uint64_t bytes = (uint64_t)spec->m * spec->k * 4;
+        return spec->m <= (uint32_t)(INT32_MAX / 4) && bytes <= (uint64_t)INT32_MAX;
     }
 
     if (spec->op >= TOY_OP_ADD) {
@@ -1033,6 +1644,23 @@ size_t emit(const struct spec *spec, uint8_t *buf, size_t cap) {
 #if defined(TOY_WIN64_ABI)
     emit_win64_prologue(&as);
 #endif
+
+    if (spec->op == TOY_OP_Q8_0_QUANTIZE) {
+        // Only the AVX2 kernel exists, see spec_supported
+        if (spec->isa != TOY_ISA_AVX2) {
+            return 0;
+        }
+        emit_q8_quantize_avx2(&as, spec->m);
+#if defined(TOY_WIN64_ABI)
+        emit_win64_epilogue(&as);
+#endif
+        asm_vzeroupper(&as);
+        asm_ret(&as);
+        if (!asm_finish(&as)) {
+            return 0;
+        }
+        return as.len;
+    }
 
     if (op_is_q8_0(spec->op)) {
         switch (spec->isa) {
@@ -1108,6 +1736,31 @@ size_t emit(const struct spec *spec, uint8_t *buf, size_t cap) {
         case TOY_OP_RMSNORM:
             emit_rmsnorm(&as, spec->m, wide, spec->param_bits);
             break;
+        case TOY_OP_SIGMOID:
+        case TOY_OP_SOFTPLUS:
+            if (!wide) {
+                return 0;
+            }
+            emit_unary_math(&as, spec->op, spec->m, wide);
+            break;
+        case TOY_OP_CONV1D_SILU:
+            if (!wide) {
+                return 0;
+            }
+            emit_conv1d_silu(&as, spec->m, spec->k, spec->param_bits, wide);
+            break;
+        case TOY_OP_L2NORM:
+            if (!wide) {
+                return 0;
+            }
+            emit_l2norm(&as, spec->m, spec->k, wide, spec->param_bits);
+            break;
+        case TOY_OP_RMSNORM_ROWS:
+            if (!wide) {
+                return 0;
+            }
+            emit_rmsnorm_rows(&as, spec->m, spec->k, wide, spec->param_bits);
+            break;
     }
 #if defined(TOY_WIN64_ABI)
     emit_win64_epilogue(&as);
@@ -1134,6 +1787,12 @@ const char *op_name(uint32_t op) {
         case TOY_OP_Q8_0_MATMUL: return "q8_0_matmul";
         case TOY_OP_Q8_0_Q8_0_MATVEC: return "q8_0_q8_0_matvec";
         case TOY_OP_Q8_0_Q8_0_MATMUL: return "q8_0_q8_0_matmul";
+        case TOY_OP_Q8_0_QUANTIZE: return "q8_0_quantize";
+        case TOY_OP_SIGMOID: return "sigmoid";
+        case TOY_OP_SOFTPLUS: return "softplus";
+        case TOY_OP_CONV1D_SILU: return "conv1d_silu";
+        case TOY_OP_L2NORM: return "l2norm";
+        case TOY_OP_RMSNORM_ROWS: return "rmsnorm_rows";
         default: return "unknown";
     }
 }
@@ -1166,6 +1825,13 @@ double spec_flops(const struct spec *spec) {
         case TOY_OP_MUL: return 1.0 * spec->m;
         case TOY_OP_SCALE: return 1.0 * spec->m;
         case TOY_OP_RMSNORM: return 4.0 * spec->m;
+        // One magnitude test and one multiply per value, then a round
+        case TOY_OP_Q8_0_QUANTIZE: return 3.0 * TOY_Q8_0_BLOCK * spec->m;
+        case TOY_OP_SIGMOID: return 4.0 * spec->m;
+        case TOY_OP_SOFTPLUS: return 6.0 * spec->m;
+        case TOY_OP_CONV1D_SILU: return 2.0 * spec->m * spec->param_bits + 4.0 * spec->m;
+        case TOY_OP_L2NORM: return 4.0 * spec->m * spec->k;
+        case TOY_OP_RMSNORM_ROWS: return 5.0 * spec->m * spec->k;
         default: return 0.0;
     }
 }

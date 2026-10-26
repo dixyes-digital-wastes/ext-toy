@@ -57,6 +57,79 @@ function test_f32(float $value): float {
     return unpack('g', pack('g', $value))[1];
 }
 
+/*
+ * The double precision variant of the same rule, as the demo PHP code writes
+ * it: the reciprocal and the product are computed in double. The two variants
+ * agree whenever every product is exact, which holds for a power of two scale
+ */
+function test_q8_quantize_double(array $values): string {
+    $data = '';
+    $blocks = intdiv(count($values), 32);
+    for ($b = 0; $b < $blocks; $b++) {
+        $base = $b * 32;
+        $amax = 0.0;
+        for ($i = 0; $i < 32; $i++) {
+            $value = abs($values[$base + $i]);
+            if ($value > $amax) {
+                $amax = $value;
+            }
+        }
+        $scale = test_f32($amax / 127.0);
+        $inverse = $scale !== 0.0 ? 1.0 / $scale : 0.0;
+        $data .= pack('v', test_f32_to_f16_bits($scale));
+        for ($i = 0; $i < 32; $i++) {
+            $product = $values[$base + $i] * $inverse;
+            $value = 0;
+            if (is_finite($product)) {
+                $rounded = round($product);
+                $value = $rounded > 127.0 ? 127 : ($rounded < -127.0 ? -127 : (int) $rounded);
+            }
+            $data .= pack('c', $value);
+        }
+    }
+    return $data;
+}
+
+/*
+ * Byte model of the C activation quantizer: d = amax / 127 in f32, the
+ * reciprocal and the product are f32, and a non-finite product quantizes to
+ * zero. An f32 product is exact in double, so test_f32 reproduces the f32
+ * multiply without a second rounding
+ */
+function test_q8_quantize(array $values): string {
+    $data = '';
+    $blocks = intdiv(count($values), 32);
+    for ($b = 0; $b < $blocks; $b++) {
+        $base = $b * 32;
+        $amax = 0.0;
+        for ($i = 0; $i < 32; $i++) {
+            $value = abs($values[$base + $i]);
+            if ($value > $amax) {
+                $amax = $value;
+            }
+        }
+        $scale = test_f32($amax / 127.0);
+        $inverse = $scale !== 0.0 ? test_f32(1.0 / $scale) : 0.0;
+        $data .= pack('v', test_f32_to_f16_bits($scale));
+        for ($i = 0; $i < 32; $i++) {
+            $product = test_f32($values[$base + $i] * $inverse);
+            $q = 0;
+            if (abs($product) <= 3.4028234663852886E+38) {
+                $rounded = round($product);
+                if ($rounded > 127.0) {
+                    $q = 127;
+                } elseif ($rounded < -127.0) {
+                    $q = -127;
+                } else {
+                    $q = (int) $rounded;
+                }
+            }
+            $data .= pack('c', $q);
+        }
+    }
+    return $data;
+}
+
 function test_f16_to_f32(int $bits): float {
     $sign = ($bits & 0x8000) ? -1.0 : 1.0;
     $exp = ($bits >> 10) & 0x1F;
