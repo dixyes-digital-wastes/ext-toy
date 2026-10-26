@@ -14,7 +14,8 @@
  * Build and run on POSIX:
  *   cc -std=gnu23 -Wall -Wextra -Werror -O2 -I. -Icodegen/include \
  *      tests/c/ops_test.c codegen/src/emit.c codegen/src/asm.c \
- *      codegen/src/isa.c codegen/src/ref.c -lm -o ops_test
+ *      codegen/src/isa.c codegen/src/ref.c codegen/src/q8_0.c \
+ *      -lm -o ops_test
  *   ./ops_test
  */
 
