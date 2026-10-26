@@ -4,7 +4,7 @@
 
 `src/ref.c` adapts the scalar dot product of `ggml_vec_dot_f32`.
 
-- Upstream: https://github.com/ggml-org/llama.cpp
+- Upstream: [https://github.com/ggml-org/llama.cpp](https://github.com/ggml-org/llama.cpp)
 - Commit: `f5027fb21307eb264aed483242603d68c87b0fe3`
 - File: `ggml/src/ggml-cpu/vec.cpp`
 - Copyright (c) 2023-2026 The ggml authors
@@ -12,7 +12,7 @@
 
 Full license text:
 
-```
+```text
 MIT License
 
 Copyright (c) 2023-2026 The ggml authors
