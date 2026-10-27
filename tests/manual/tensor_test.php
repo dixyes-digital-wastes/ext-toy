@@ -116,8 +116,9 @@ check('cast is independent of shape changes', $cast->shape() === [2, 2]);
 // Errors
 check_throws('rejects an unknown dtype', ValueError::class,
     fn () => Toy\Tensor::zeros('f64', [1]));
-check_throws('rejects q8_0 in C1', ValueError::class,
-    fn () => Toy\Tensor::zeros('q8_0', [32]));
+$q8_zeros = Toy\Tensor::zeros('q8_0', [32]);
+check('accepts whole q8_0 blocks',
+    $q8_zeros->dtype === 'q8_0' && $q8_zeros->bytes() === 34);
 check_throws('rejects an empty shape', ValueError::class,
     fn () => Toy\Tensor::zeros('f32', []));
 check_throws('rejects five dimensions', ValueError::class,

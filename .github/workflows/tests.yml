@@ -8,8 +8,11 @@ on:
 jobs:
   linux:
     name: Linux
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
+    env:
+      # The extension sources are C23 and gnu23 needs GCC 14
+      CC: gcc-14
     steps:
       - uses: actions/checkout@v7
 
@@ -23,7 +26,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            autoconf automake build-essential pkg-config
+            autoconf automake build-essential gcc-14 pkg-config
 
       - name: Build
         run: |
@@ -36,8 +39,10 @@ jobs:
 
   macos:
     name: macOS
-    runs-on: macos-latest
-    timeout-minutes: 20
+    # The arm64 runner has no ISA detection, so the kernel tests fail there.
+    # The Intel runner keeps them meaningful
+    runs-on: macos-26-intel
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
 
@@ -66,12 +71,6 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - name: Set up PHP
-        uses: shivammathur/setup-php@v2
-        with:
-          php-version: '8.5'
-          coverage: none
-
       - name: Check out PHP source
         uses: actions/checkout@v7
         with:
@@ -83,6 +82,7 @@ jobs:
         uses: actions/checkout@v7
         with:
           repository: dixyes-digital-wastes/ext-toy
+          ref: ${{ github.sha }}
           path: build/php-src/ext/toy
 
       - name: Check out the PHP build tools
@@ -97,13 +97,19 @@ jobs:
         working-directory: build/php-src
         run: call "%GITHUB_WORKSPACE%\php-sdk-binary-tools\phpsdk-starter.bat" -c vs18 -a x64 -t %GITHUB_WORKSPACE%\windows-toy-build.bat
 
-      - name: Set extension path
+      - name: Check the build output
         shell: pwsh
         run: |
-          $dll = "$PWD\build\php-src\x64\Release_TS\php_toy.dll"
-          "TOY_DLL=$dll" >> $env:GITHUB_ENV
-          Get-Item $dll | Select-Object FullName
+          $dir = Join-Path $PWD "build/php-src/x64/Release_TS"
+          foreach ($name in 'php.exe', 'php_toy.dll') {
+            $path = Join-Path $dir $name
+            if (-not (Test-Path $path)) { throw "missing build output: $path" }
+            Get-Item $path | Select-Object FullName, Length
+          }
 
       - name: Run tests
         shell: pwsh
-        run: php -n -d extension=$env:TOY_DLL tests/manual/tensor_test.php
+        run: |
+          $dir = Join-Path $PWD "build/php-src/x64/Release_TS"
+          & (Join-Path $dir 'php.exe') -n -d extension_dir="$dir" -d extension=php_toy.dll tests/manual/tensor_test.php
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
