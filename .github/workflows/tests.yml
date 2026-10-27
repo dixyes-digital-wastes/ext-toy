@@ -10,9 +10,6 @@ jobs:
     name: Linux
     runs-on: ubuntu-24.04
     timeout-minutes: 20
-    env:
-      # The extension sources are C23 and gnu23 needs GCC 14
-      CC: gcc-14
     steps:
       - uses: actions/checkout@v7
 
@@ -26,7 +23,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            autoconf automake build-essential gcc-14 pkg-config
+            autoconf automake build-essential pkg-config
 
       - name: Build
         run: |

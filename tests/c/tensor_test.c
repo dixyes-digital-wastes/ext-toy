@@ -3,12 +3,13 @@
  * This file does not link against PHP; the alias tests cover the C-only API
  *
  * Build and run:
- *   cc -std=gnu23 -Wall -Wextra -I. -Icodegen/include \
+ *   cc -std=gnu17 -Wall -Wextra -I. -Icodegen/include \
  *      tests/c/tensor_test.c tensor.c codegen/src/ref.c \
  *      codegen/src/q8_0.c -lm -o tensor_test
  *   ./tensor_test
  */
 
+#include <assert.h>
 #include <math.h>
 #include <stdalign.h>
 #include <stdint.h>

@@ -5,7 +5,7 @@ A PHP extension that provides the `Toy\Tensor` class and 20 tensor operators.
 ## Requirements
 
 - PHP 8.4 or later, with the development headers
-- A compiler that supports C23
+- A compiler that supports C17
 
 ## Build
 

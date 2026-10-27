@@ -2,6 +2,7 @@
 
 #include "arena_config.h"
 
+#include <assert.h>
 #include <string.h>
 
 #include "toy/codegen.h"

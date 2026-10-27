@@ -1,6 +1,9 @@
 #ifndef TENSOR_H
 #define TENSOR_H
 
+#include "attributes.h"
+
+#include <assert.h>
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -52,8 +55,8 @@ typedef enum layout {
 } layout;
 
 typedef enum tensor_flags {
-    TOY_TENSOR_FLAG_OWNS_DATA = 0b01u,
-    TOY_TENSOR_FLAG_ALIAS = 0b10u,
+    TOY_TENSOR_FLAG_OWNS_DATA = 0x1u,
+    TOY_TENSOR_FLAG_ALIAS = 0x2u,
 } tensor_flags;
 
 typedef enum tensor_status {
@@ -101,19 +104,19 @@ typedef struct tensor {
 /* Returns NULL for an unknown dtype */
 const char *dtype_to_name(dtype dtype_value);
 
-[[nodiscard]] bool dtype_from_name(const char *name, size_t length, dtype *out_dtype);
+TOY_NODISCARD bool dtype_from_name(const char *name, size_t length, dtype *out_dtype);
 
 /* Computes the byte count of a shape; q8_0 needs a last dim divisible by 32 */
-[[nodiscard]] tensor_status tensor_shape_bytes(dtype dtype_value, uint8_t rank,
+TOY_NODISCARD tensor_status tensor_shape_bytes(dtype dtype_value, uint8_t rank,
                                                const uint32_t *dims, size_t *bytes);
 
 /* Allocates a zero-filled tensor with its own 64-byte aligned buffer */
-[[nodiscard]] tensor *tensor_alloc(dtype dtype_value, uint8_t rank,
+TOY_NODISCARD tensor *tensor_alloc(dtype dtype_value, uint8_t rank,
                                    const uint32_t *dims, tensor_status *status);
 
 /* Wraps external memory; the tensor does not own the memory. This is the only
  * exported C function */
-[[nodiscard]] TOY_API tensor *toy_tensor_alias(void *data, size_t bytes,
+TOY_NODISCARD TOY_API tensor *toy_tensor_alias(void *data, size_t bytes,
                                                dtype dtype_value, uint8_t rank,
                                                const uint32_t dims[TOY_TENSOR_MAX_DIMS]);
 
@@ -121,20 +124,20 @@ tensor *tensor_retain(tensor *self);
 void tensor_release(tensor *self);
 
 /* Reshapes in place; the byte count must not change */
-[[nodiscard]] tensor_status tensor_reshape(tensor *self, uint8_t rank,
+TOY_NODISCARD tensor_status tensor_reshape(tensor *self, uint8_t rank,
                                            const uint32_t *dims);
 
 /* Copies into a newly allocated tensor */
-[[nodiscard]] tensor *tensor_clone(const tensor *self, tensor_status *status);
+TOY_NODISCARD tensor *tensor_clone(const tensor *self, tensor_status *status);
 
 /* Fills every element with one scalar; f32 and q8_0 only */
-[[nodiscard]] tensor_status tensor_fill(tensor *self, float value);
+TOY_NODISCARD tensor_status tensor_fill(tensor *self, float value);
 
 /*
  * Converts into a newly allocated tensor of another dtype; f32 and q8_0 only
  * Same-dtype conversion copies the bytes
  */
-[[nodiscard]] tensor *tensor_cast(const tensor *self, dtype dtype_value,
+TOY_NODISCARD tensor *tensor_cast(const tensor *self, dtype dtype_value,
                                   tensor_status *status);
 
 size_t tensor_numel(const tensor *self);

@@ -3,16 +3,17 @@
  * This file does not link against PHP
  *
  * Build and run on POSIX:
- *   cc -std=gnu23 -Wall -Wextra -Werror -O2 -pthread -I. \
+ *   cc -std=gnu17 -Wall -Wextra -Werror -O2 -pthread -I. \
  *      tests/c/arena_test.c arena.c spec_cache.c -o arena_test
  *   ./arena_test
  *
  * Build and run on Windows from a vcvars64 shell:
- *   cl /nologo /std:clatest /W4 /WX /O2 arena.c spec_cache.c \
+ *   cl /nologo /std:c17 /W4 /WX /O2 arena.c spec_cache.c \
  *      tests\c\arena_test.c /Fe:arena_test.exe
  *   arena_test.exe
  */
 
+#include <assert.h>
 #include <stdalign.h>
 #include <stdint.h>
 #include <stdio.h>

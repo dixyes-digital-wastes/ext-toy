@@ -3,6 +3,8 @@
 
 #include "php.h"
 
+#include "attributes.h"
+
 /*
  * Marks the C symbols that the extension exports
  * The build hides every other symbol
@@ -42,13 +44,13 @@ static inline tensor *php_tensor_fetch(zval *value)
 }
 
 /* Creates a Tensor object; on success the object owns tensor_value */
-[[nodiscard]] zend_result php_tensor_wrap(zval *return_value, tensor *tensor_value);
+TOY_NODISCARD zend_result php_tensor_wrap(zval *return_value, tensor *tensor_value);
 
 /*
  * Allocates a zero-filled tensor and wraps it in a Tensor object
  * Returns the tensor owned by return_value, or NULL after an exception
  */
-[[nodiscard]] tensor *php_tensor_alloc_object(zval *return_value, dtype dtype_value,
+TOY_NODISCARD tensor *php_tensor_alloc_object(zval *return_value, dtype dtype_value,
                                               uint8_t rank,
                                               const uint32_t dims[TOY_TENSOR_MAX_DIMS],
                                               uint32_t shape_arg_num);

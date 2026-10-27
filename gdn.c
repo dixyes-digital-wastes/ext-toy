@@ -1,4 +1,5 @@
 #include "gdn.h"
+#include "attributes.h"
 
 #include <math.h>
 #include <stdlib.h>
@@ -212,7 +213,7 @@ static TOY_GDN_TARGET void gdn_columns_avx2(const gdn_problem *problem, uint32_t
 }
 #endif
 
-[[nodiscard]] bool gdn_recurrence_avx2(const gdn_problem *problem,
+TOY_NODISCARD bool gdn_recurrence_avx2(const gdn_problem *problem,
                                        const gdn_range *range)
 {
 #if defined(TOY_GDN_X86)

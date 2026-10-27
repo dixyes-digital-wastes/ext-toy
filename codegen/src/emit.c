@@ -1358,7 +1358,7 @@ static void emit_q8_q8_avx2(struct assembler *as, uint32_t m, uint32_t n, uint32
     const int32_t groupOut = (int32_t)(Q8Q8_ROWS * n * 4);
 
     // int16 ones turn the pair sums into int32 lanes
-    asm_mov_imm32(as, TOY_RAX, 0x0001'0001);
+    asm_mov_imm32(as, TOY_RAX, 0x00010001);
     asm_vmovd_gpr(as, Q8Q8_ONES, TOY_RAX);
     asm_vbroadcastss_reg(as, Q8Q8_ONES, Q8Q8_ONES);
 

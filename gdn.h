@@ -1,6 +1,8 @@
 #ifndef GDN_H
 #define GDN_H
 
+#include "attributes.h"
+
 #include <stdbool.h>
 #include <stdint.h>
 
@@ -57,7 +59,7 @@ void gdn_recurrence_scalar(const gdn_problem *problem, const gdn_range *range);
  * scaled q scratch buffer cannot be allocated, and the caller then runs the
  * scalar path; the result is the same either way
  */
-[[nodiscard]] bool gdn_recurrence_avx2(const gdn_problem *problem,
+TOY_NODISCARD bool gdn_recurrence_avx2(const gdn_problem *problem,
                                        const gdn_range *range);
 
 #endif /* GDN_H */

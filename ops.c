@@ -5,6 +5,7 @@
 #include "php.h"
 
 #include "php_toy.h"
+#include "attributes.h"
 #include "gdn.h"
 #include "kernel.h"
 
@@ -293,7 +294,7 @@ const zend_function_entry module_functions[] = {
     ZEND_FE_END
 };
 
-[[nodiscard]] static tensor *php_tensor_arg(zval *value)
+TOY_NODISCARD static tensor *php_tensor_arg(zval *value)
 {
     tensor *self = php_tensor_fetch(value);
 
@@ -304,7 +305,7 @@ const zend_function_entry module_functions[] = {
 }
 
 /* A frameless handler does not use ZPP, so check the types here */
-[[nodiscard]] static bool php_tensor_object(zval *value, tensor **out,
+TOY_NODISCARD static bool php_tensor_object(zval *value, tensor **out,
                                             uint32_t arg_num)
 {
     if (UNEXPECTED(Z_TYPE_P(value) != IS_OBJECT)
@@ -323,7 +324,7 @@ const zend_function_entry module_functions[] = {
     return true;
 }
 
-[[nodiscard]] static bool php_tensor_require_f32(const tensor *self,
+TOY_NODISCARD static bool php_tensor_require_f32(const tensor *self,
                                                  uint32_t arg_num)
 {
     if (self->dtype != TOY_DTYPE_F32) {
@@ -333,7 +334,7 @@ const zend_function_entry module_functions[] = {
     return true;
 }
 
-[[nodiscard]] static bool php_tensor_require_q8_0(const tensor *self,
+TOY_NODISCARD static bool php_tensor_require_q8_0(const tensor *self,
                                                   uint32_t arg_num)
 {
     if (self->dtype != TOY_DTYPE_Q8_0) {
@@ -343,7 +344,7 @@ const zend_function_entry module_functions[] = {
     return true;
 }
 
-[[nodiscard]] static bool php_tensor_dim(zend_long value, uint32_t *dim,
+TOY_NODISCARD static bool php_tensor_dim(zend_long value, uint32_t *dim,
                                          uint32_t arg_num)
 {
     if (value < 1 || (zend_ulong) value > UINT32_MAX) {
@@ -355,7 +356,7 @@ const zend_function_entry module_functions[] = {
     return true;
 }
 
-[[nodiscard]] static bool php_tensor_expect_rank2(const tensor *self,
+TOY_NODISCARD static bool php_tensor_expect_rank2(const tensor *self,
                                                   uint32_t arg_num, uint32_t dim0,
                                                   uint32_t dim1)
 {
@@ -371,7 +372,7 @@ const zend_function_entry module_functions[] = {
     return true;
 }
 
-[[nodiscard]] static bool php_tensor_expect_rank1(const tensor *self,
+TOY_NODISCARD static bool php_tensor_expect_rank1(const tensor *self,
                                                   uint32_t arg_num, uint32_t length)
 {
     if (self->rank != 1) {
@@ -386,7 +387,7 @@ const zend_function_entry module_functions[] = {
     return true;
 }
 
-[[nodiscard]] static bool php_tensor_expect_rank3(const tensor *self,
+TOY_NODISCARD static bool php_tensor_expect_rank3(const tensor *self,
                                                   uint32_t arg_num, uint32_t dim0,
                                                   uint32_t dim1, uint32_t dim2)
 {
@@ -405,7 +406,7 @@ const zend_function_entry module_functions[] = {
 }
 
 /* A slice bound, from zero up to the dimension length */
-[[nodiscard]] static bool php_tensor_bound(zend_long value, uint32_t limit,
+TOY_NODISCARD static bool php_tensor_bound(zend_long value, uint32_t limit,
                                            uint32_t *out, uint32_t arg_num)
 {
     if (value < 0 || (zend_ulong) value > limit) {
@@ -416,7 +417,7 @@ const zend_function_entry module_functions[] = {
     return true;
 }
 
-[[nodiscard]] static tensor *php_tensor_alloc_result_dtype(dtype dtype_value, uint8_t rank,
+TOY_NODISCARD static tensor *php_tensor_alloc_result_dtype(dtype dtype_value, uint8_t rank,
                                                           const uint32_t *dims)
 {
     tensor_status status;
@@ -432,7 +433,7 @@ const zend_function_entry module_functions[] = {
     return self;
 }
 
-[[nodiscard]] static tensor *php_tensor_alloc_result(uint8_t rank,
+TOY_NODISCARD static tensor *php_tensor_alloc_result(uint8_t rank,
                                                      const uint32_t *dims)
 {
     return php_tensor_alloc_result_dtype(TOY_DTYPE_F32, rank, dims);
@@ -451,7 +452,7 @@ static uint32_t php_element_count(size_t numel)
     return numel <= UINT32_MAX ? (uint32_t) numel : 0;
 }
 
-[[nodiscard]] static bool php_tensor_optional_out(zval *value, uint32_t arg_num,
+TOY_NODISCARD static bool php_tensor_optional_out(zval *value, uint32_t arg_num,
                                                   tensor **out)
 {
     if (value == NULL || Z_TYPE_P(value) == IS_NULL) {
@@ -473,7 +474,7 @@ static uint32_t php_element_count(size_t numel)
     return true;
 }
 
-[[nodiscard]] static bool php_tensor_out_matches(const tensor *out, uint8_t rank,
+TOY_NODISCARD static bool php_tensor_out_matches(const tensor *out, uint8_t rank,
                                                      const uint32_t *dims, uint32_t arg_num)
 {
     if (out->dtype != TOY_DTYPE_F32) {
@@ -494,13 +495,13 @@ static uint32_t php_element_count(size_t numel)
 }
 
 /* Same data range, to tell if out is one of the inputs */
-[[nodiscard]] static bool php_tensor_same_range(const tensor *a, const tensor *b)
+TOY_NODISCARD static bool php_tensor_same_range(const tensor *a, const tensor *b)
 {
     return a->bytes == b->bytes
         && (uintptr_t) tensor_data(a) == (uintptr_t) tensor_data(b);
 }
 
-[[nodiscard]] static bool php_tensor_ranges_overlap(const tensor *a,
+TOY_NODISCARD static bool php_tensor_ranges_overlap(const tensor *a,
                                                         const tensor *b)
 {
     const uintptr_t a_begin = (uintptr_t) tensor_data(a);
@@ -513,7 +514,7 @@ static uint32_t php_element_count(size_t numel)
  * add and scale accept an out that matches one input exactly. A partial
  * overlap breaks the elementwise read and write
  */
-[[nodiscard]] static bool php_tensor_out_alias_check(const tensor *out,
+TOY_NODISCARD static bool php_tensor_out_alias_check(const tensor *out,
                                                          const tensor *a,
                                                          const tensor *b,
                                                          uint32_t arg_num)
@@ -528,7 +529,7 @@ static uint32_t php_element_count(size_t numel)
     return true;
 }
 
-[[nodiscard]] static bool php_tensor_out_disjoint_check(const tensor *out,
+TOY_NODISCARD static bool php_tensor_out_disjoint_check(const tensor *out,
                                                             const tensor *a,
                                                             const tensor *b,
                                                             uint32_t out_arg,
@@ -546,7 +547,7 @@ static uint32_t php_element_count(size_t numel)
 }
 
 /* rmsnorm_into accepts an out that matches x exactly, but not one that touches w */
-[[nodiscard]] static bool php_tensor_out_rmsnorm_check(const tensor *out,
+TOY_NODISCARD static bool php_tensor_out_rmsnorm_check(const tensor *out,
                                                            const tensor *x,
                                                            const tensor *w,
                                                            uint32_t arg_num)
@@ -811,7 +812,7 @@ static bool php_tensor_activation_impl(tensor *a, zval *out_value, zval *return_
  * Resolves the optional row range of l2norm_rows and conv1d_silu. A missing
  * count means every row from start on
  */
-[[nodiscard]] static bool php_tensor_row_range(uint32_t rows, zend_long start_arg,
+TOY_NODISCARD static bool php_tensor_row_range(uint32_t rows, zend_long start_arg,
                                                zend_long count_arg, bool count_is_null,
                                                uint32_t *start, uint32_t *count,
                                                uint32_t start_arg_num, uint32_t count_arg_num)
@@ -1446,7 +1447,7 @@ static bool php_tensor_matvec_q8_0_q8_0_impl(tensor *w, tensor *x, uint32_t m,
  * The state is the only in/out tensor, so it may not share bytes with any
  * input, and an explicit out may not share bytes with the state or an input
  */
-[[nodiscard]] static bool php_tensor_gdn_aliasing(const tensor *state,
+TOY_NODISCARD static bool php_tensor_gdn_aliasing(const tensor *state,
                                                   const tensor *out,
                                                   const tensor *const sources[5])
 {

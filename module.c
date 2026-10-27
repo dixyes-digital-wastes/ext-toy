@@ -7,6 +7,7 @@
 
 #include "php_ini.h"
 #include "php_toy.h"
+#include "attributes.h"
 #include "kernel.h"
 #include "arena_config.h"
 
@@ -99,7 +100,7 @@ tensor *php_tensor_alloc_object(zval *return_value, dtype dtype_value, uint8_t r
     return php_tensor_fetch(return_value);
 }
 
-[[nodiscard]] static bool php_tensor_parse_dtype(zend_string *name, dtype *out_dtype,
+TOY_NODISCARD static bool php_tensor_parse_dtype(zend_string *name, dtype *out_dtype,
                                                  uint32_t arg_num)
 {
     if (!dtype_from_name(ZSTR_VAL(name), ZSTR_LEN(name), out_dtype)) {
@@ -116,7 +117,7 @@ tensor *php_tensor_alloc_object(zval *return_value, dtype dtype_value, uint8_t r
     return true;
 }
 
-[[nodiscard]] static bool php_tensor_parse_shape(zval *value, uint8_t *rank,
+TOY_NODISCARD static bool php_tensor_parse_shape(zval *value, uint8_t *rank,
                                                  uint32_t dims[TOY_TENSOR_MAX_DIMS],
                                                  uint32_t arg_num)
 {
@@ -150,7 +151,7 @@ tensor *php_tensor_alloc_object(zval *return_value, dtype dtype_value, uint8_t r
     return true;
 }
 
-[[nodiscard]] static tensor *php_tensor_require_this(zval *this_value)
+TOY_NODISCARD static tensor *php_tensor_require_this(zval *this_value)
 {
     tensor *tensor_value = php_tensor_fetch(this_value);
 

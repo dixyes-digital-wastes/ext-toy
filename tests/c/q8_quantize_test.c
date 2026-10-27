@@ -8,7 +8,7 @@
  * reference bit for bit
  *
  * Build and run:
- *   cc -std=gnu23 -Wall -Wextra -Werror -O2 -I. -Icodegen/include \
+ *   cc -std=gnu17 -Wall -Wextra -Werror -O2 -I. -Icodegen/include \
  *      tests/c/q8_quantize_test.c codegen/src/emit.c codegen/src/asm.c \
  *      codegen/src/isa.c codegen/src/q8_0.c -lm -o q8_quantize_test
  *   ./q8_quantize_test

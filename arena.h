@@ -1,6 +1,9 @@
 #ifndef ARENA_H
 #define ARENA_H
 
+#include "attributes.h"
+
+#include <assert.h>
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -58,7 +61,7 @@ typedef struct arena arena;
 arena_config arena_default_config(void);
 
 /* Returns NULL when the size is invalid or the mapping fails */
-[[nodiscard]] arena *arena_create(const arena_config *config);
+TOY_NODISCARD arena *arena_create(const arena_config *config);
 void arena_destroy(arena *arena);
 
 size_t arena_page_size(const arena *arena);
@@ -66,16 +69,16 @@ size_t arena_usable_bytes(const arena *arena);
 arena_kind arena_kind_of(const arena *arena);
 
 /* Allocates 1, 2, 4 or 8 pages. The block is writable and not executable. */
-[[nodiscard]] bool arena_alloc(arena *arena, uint32_t pages, arena_block *block);
+TOY_NODISCARD bool arena_alloc(arena *arena, uint32_t pages, arena_block *block);
 /* Rounds the byte count up to a block size. Fails above 8 pages. */
-[[nodiscard]] bool arena_alloc_bytes(arena *arena, size_t bytes, arena_block *block);
+TOY_NODISCARD bool arena_alloc_bytes(arena *arena, size_t bytes, arena_block *block);
 
 /* The block may be writable or executable before this call. */
 void arena_free(arena *arena, arena_block *block);
 
 /* Seal switches the block to executable. Unseal switches it back to writable. */
-[[nodiscard]] bool arena_seal(arena *arena, const arena_block *block);
-[[nodiscard]] bool arena_unseal(arena *arena, const arena_block *block);
+TOY_NODISCARD bool arena_seal(arena *arena, const arena_block *block);
+TOY_NODISCARD bool arena_unseal(arena *arena, const arena_block *block);
 
 /* Reads one consistent snapshot. The caller may read it on any thread. */
 void arena_get_stats(arena *arena, arena_stats *stats);

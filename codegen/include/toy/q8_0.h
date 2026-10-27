@@ -1,6 +1,7 @@
 #ifndef TOY_Q8_0_H
 #define TOY_Q8_0_H
 
+#include <assert.h>
 #include <stddef.h>
 #include <stdint.h>
 

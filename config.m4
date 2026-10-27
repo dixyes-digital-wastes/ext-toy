@@ -5,34 +5,34 @@ PHP_ARG_ENABLE([toy],
   [no])
 
 if test "$PHP_TOY" != "no"; then
-  dnl The tensor sources use C23. Probe the actual compiler and CFLAGS first.
+  dnl The tensor sources use C17. Probe the actual compiler and CFLAGS first.
   dnl The probe appends the flag the same way the build does, so a user
-  dnl -std=gnu17 in CFLAGS is overridden by the later -std=gnu23.
-  AC_CACHE_CHECK([whether $CC compiles C23 with -std=gnu23], [php_cv_c23], [
+  dnl -std=gnu11 in CFLAGS is overridden by the later -std=gnu17.
+  AC_CACHE_CHECK([whether $CC compiles C17 with -std=gnu17], [php_cv_c17], [
     save_CFLAGS="$CFLAGS"
-    CFLAGS="$CFLAGS -std=gnu23"
+    CFLAGS="$CFLAGS -std=gnu17"
     AC_COMPILE_IFELSE([AC_LANG_PROGRAM([[
-      #include <stdbool.h>
+      #include <assert.h>
       #include <stdalign.h>
-      #if !defined(__STDC_VERSION__) || __STDC_VERSION__ < 202311L
-      #error C23 is required
+      #include <stdbool.h>
+      #if !defined(__STDC_VERSION__) || __STDC_VERSION__ < 201710L
+      #error C17 is required
       #endif
-      static_assert(1, "C23 static_assert");
-      [[nodiscard]] static int c23_probe_fn(void) { return 1; }
-      struct c23_probe { int value; };
+      static_assert(1, "C17 static_assert");
+      struct c17_probe { int value; };
     ]], [[
       bool flag = true;
       alignas(8) int aligned = 0;
-      struct c23_probe probe = { .value = aligned };
-      return flag ? c23_probe_fn() + probe.value : 0;
+      struct c17_probe probe = { .value = aligned };
+      return flag ? probe.value : 0;
     ]])],
-    [php_cv_c23=yes],
-    [php_cv_c23=no])
+    [php_cv_c17=yes],
+    [php_cv_c17=no])
     CFLAGS="$save_CFLAGS"
   ])
 
-  if test "$php_cv_c23" != "yes"; then
-    AC_MSG_ERROR([toy requires C23 support; $CC does not compile C23 code with -std=gnu23])
+  if test "$php_cv_c17" != "yes"; then
+    AC_MSG_ERROR([toy requires C17 support; $CC does not compile C17 code with -std=gnu17])
   fi
 
   dnl The extra flags apply to this extension only. They come after CFLAGS
@@ -53,7 +53,7 @@ if test "$PHP_TOY" != "no"; then
     spec_cache.c
     tensor.c
   ]), [$ext_shared],, [
-    -std=gnu23
+    -std=gnu17
     -fvisibility=hidden
     -I$abs_srcdir/codegen/include
     -DZEND_ENABLE_STATIC_TSRMLS_CACHE=1

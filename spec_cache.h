@@ -2,7 +2,9 @@
 #define SPEC_CACHE_H
 
 #include "arena.h"
+#include "attributes.h"
 
+#include <assert.h>
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -39,7 +41,7 @@ typedef bool (*spec_fill)(const uint8_t *key, void *context, uint8_t *code,
 typedef struct spec_cache spec_cache;
 
 /* Returns NULL for an invalid capacity or an allocation failure */
-[[nodiscard]] spec_cache *spec_cache_create(arena *arena, size_t capacity);
+TOY_NODISCARD spec_cache *spec_cache_create(arena *arena, size_t capacity);
 /* The arena owns the code blocks. This call releases the table only. */
 void spec_cache_destroy(spec_cache *cache);
 
@@ -48,7 +50,7 @@ void spec_cache_destroy(spec_cache *cache);
  * The fill callback runs outside the cache lock. A full table rejects the
  * insert and returns the new block to the arena.
  */
-[[nodiscard]] bool spec_cache_get_or_create(spec_cache *cache,
+TOY_NODISCARD bool spec_cache_get_or_create(spec_cache *cache,
                                             const uint8_t key[TOY_SPEC_KEY_SIZE],
                                             size_t bytes_hint, spec_fill fill,
                                             void *context, arena_block *block);
@@ -57,13 +59,13 @@ void spec_cache_destroy(spec_cache *cache);
  * Same lookup and generation as spec_cache_get_or_create
  * Returns NULL when the arena is full or the fill callback fails.
  */
-[[nodiscard]] uint8_t *spec_cache_get_code(spec_cache *cache,
+TOY_NODISCARD uint8_t *spec_cache_get_code(spec_cache *cache,
                                            const uint8_t key[TOY_SPEC_KEY_SIZE],
                                            size_t bytes_hint, spec_fill fill,
                                            void *context);
 
 /* Looks up one entry. It never generates code. */
-[[nodiscard]] bool spec_cache_lookup(spec_cache *cache,
+TOY_NODISCARD bool spec_cache_lookup(spec_cache *cache,
                                      const uint8_t key[TOY_SPEC_KEY_SIZE],
                                      arena_block *block);
 

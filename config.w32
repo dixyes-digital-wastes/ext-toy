@@ -4,10 +4,9 @@ ARG_ENABLE("toy", "whether to enable the Toy tensor extension", "no");
 
 if (PHP_TOY != "no") {
 	/*
-	 * The extension sources are C23 while the core is compiled as C17, so the
-	 * standard stays on this extension. The force-included header supplies
-	 * max_align_t, which MSVC lacks and the shipped PHP 8.4 headers use from
-	 * C11 on
+	 * The extension sources are C17, so the standard stays on this extension.
+	 * The force-included header supplies max_align_t, which MSVC lacks and the
+	 * shipped PHP 8.4 headers use from C11 on
 	 *
 	 * /FI is resolved like an include from the source file, so sources under
 	 * codegen/src need the extension root on the include path
@@ -17,5 +16,5 @@ if (PHP_TOY != "no") {
 	 */
 	EXTENSION("toy",
 		"module.c ops.c gdn.c codegen\\src\\asm.c codegen\\src\\emit.c codegen\\src\\isa.c codegen\\src\\q8_0.c codegen\\src\\ref.c arena.c kernel.c arena_config.c spec_cache.c tensor.c",
-		PHP_TOY_SHARED, "/std:clatest /source-charset:utf-8 /I " + configure_module_dirname + " /I " + configure_module_dirname + "\\codegen\\include /FI tensor_msvc_compat.h");
+		PHP_TOY_SHARED, "/std:c17 /source-charset:utf-8 /I " + configure_module_dirname + " /I " + configure_module_dirname + "\\codegen\\include /FI tensor_msvc_compat.h");
 }

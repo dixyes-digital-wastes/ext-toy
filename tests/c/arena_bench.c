@@ -6,7 +6,7 @@
  * at once. The seal variant also writes one byte and seals the block.
  *
  * Build and run:
- *   cc -std=gnu23 -Wall -Wextra -Werror -O2 -pthread -I. \
+ *   cc -std=gnu17 -Wall -Wextra -Werror -O2 -pthread -I. \
  *      tests/c/arena_bench.c arena.c -o arena_bench
  *   ./arena_bench [repeats]
  */
