@@ -17,5 +17,5 @@ if (PHP_TOY != "no") {
 	 */
 	EXTENSION("toy",
 		"module.c ops.c gdn.c codegen\\src\\asm.c codegen\\src\\emit.c codegen\\src\\isa.c codegen\\src\\q8_0.c codegen\\src\\ref.c arena.c kernel.c arena_config.c spec_cache.c tensor.c",
-		PHP_TOY_SHARED, "/std:clatest /source-charset:utf-8 /I . /FI tensor_msvc_compat.h /I codegen\\include");
+		PHP_TOY_SHARED, "/std:clatest /source-charset:utf-8 /I " + configure_module_dirname + " /I " + configure_module_dirname + "\\codegen\\include /FI tensor_msvc_compat.h");
 }
