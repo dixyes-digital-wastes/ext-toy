@@ -1,0 +1,109 @@
+name: tests
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  linux:
+    name: Linux
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.5'
+          coverage: none
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            autoconf automake build-essential pkg-config
+
+      - name: Build
+        run: |
+          phpize
+          ./configure --enable-toy
+          make -j"$(nproc)"
+
+      - name: Run tests
+        run: make test TESTS=tests
+
+  macos:
+    name: macOS
+    runs-on: macos-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.5'
+          coverage: none
+
+      - name: Install build dependencies
+        run: brew install autoconf automake pkg-config
+
+      - name: Build
+        run: |
+          phpize
+          ./configure --enable-toy
+          make -j"$(sysctl -n hw.ncpu)"
+
+      - name: Run tests
+        run: make test TESTS=tests
+
+  windows:
+    name: Windows
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.5'
+          coverage: none
+
+      - name: Check out PHP source
+        uses: actions/checkout@v7
+        with:
+          repository: php/php-src
+          ref: PHP-8.5
+          path: build/php-src
+
+      - name: Check out Toy source
+        uses: actions/checkout@v7
+        with:
+          repository: dixyes-digital-wastes/ext-toy
+          path: build/php-src/ext/toy
+
+      - name: Check out the PHP build tools
+        uses: actions/checkout@v7
+        with:
+          repository: php/php-sdk-binary-tools
+          ref: master
+          path: php-sdk-binary-tools
+
+      - name: Build
+        shell: cmd
+        working-directory: build/php-src
+        run: call "%GITHUB_WORKSPACE%\php-sdk-binary-tools\phpsdk-starter.bat" -c vs18 -a x64 -t %GITHUB_WORKSPACE%\windows-toy-build.bat
+
+      - name: Set extension path
+        shell: pwsh
+        run: |
+          $dll = "$PWD\build\php-src\x64\Release_TS\php_toy.dll"
+          "TOY_DLL=$dll" >> $env:GITHUB_ENV
+          Get-Item $dll | Select-Object FullName
+
+      - name: Run tests
+        shell: pwsh
+        run: php -n -d extension=$env:TOY_DLL tests/manual/tensor_test.php
